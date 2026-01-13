@@ -1,0 +1,28 @@
+# Core framework
+pocketflow
+
+# Web server
+fastapi
+uvicorn
+python-multipart
+pydantic
+
+# LLM clients (install based on LLM_PROVIDER choice)
+openai
+anthropic
+ollama
+
+# Data analysis
+polars
+pandas
+numpy
+altair>=6.0.0
+vl-convert-python
+duckdb
+statsmodels
+
+# YAML parsing for structured outputs
+pyyaml
+
+# Optional: For enhanced code sandboxing
+# RestrictedPython
