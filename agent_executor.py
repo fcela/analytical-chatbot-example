@@ -212,7 +212,7 @@ class AnalyticalChatbotExecutor(AgentExecutor):
                     await send_art(art_id, [Part(root=DataPart(data={"image_base64": content}))])
                 elif art_type == "table":
                     await send_art(art_id, [Part(root=DataPart(data={"html": content}))])
-                elif art_type == "html":
+                elif art_type == "html" or art_type == "mermaid" or art_type == "markdown":
                     await send_art(art_id, [Part(root=TextPart(text=content))])
 
             if error:
