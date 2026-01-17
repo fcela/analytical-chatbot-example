@@ -1,11 +1,16 @@
 # Core framework
 pocketflow
 
+# A2A Protocol SDK (Agent-to-Agent)
+a2a
+
 # Web server
 fastapi
 uvicorn
+starlette
 python-multipart
 pydantic
+httpx  # For A2A client examples
 
 # LLM clients (install based on LLM_PROVIDER choice)
 openai
@@ -19,7 +24,6 @@ numpy
 altair>=6.0.0
 vl-convert-python
 duckdb
-statsmodels
 
 # YAML parsing for structured outputs
 pyyaml
