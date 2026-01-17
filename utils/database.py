@@ -23,12 +23,20 @@ DB_PATH = ":memory:"
 
 # Global connection (per-process)
 _connection: Optional["duckdb.DuckDBPyConnection"] = None
+_connection_pid: Optional[int] = None
 _lock = threading.Lock()
 
 
 def get_connection() -> "duckdb.DuckDBPyConnection":
     """Get or create the DuckDB connection."""
-    global _connection
+    global _connection, _connection_pid
+    
+    current_pid = os.getpid()
+    
+    # Reset connection if we are in a different process (fork safety)
+    if _connection is not None and _connection_pid != current_pid:
+        _connection = None
+
     if _connection is None:
         with _lock:
             if _connection is None:
@@ -36,6 +44,7 @@ def get_connection() -> "duckdb.DuckDBPyConnection":
                     raise RuntimeError("DuckDB is not installed")
                 _connection = duckdb.connect(DB_PATH)
                 _initialize_sample_data(_connection)
+                _connection_pid = current_pid
     return _connection
 
 
