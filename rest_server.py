@@ -62,7 +62,7 @@ def llm_info():
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origin_regex="https?://(localhost|127\.0\.0\.1)(:[0-9]+)?",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -180,6 +180,10 @@ async def chat_endpoint(
                                 art_type = "error"
                             elif name.startswith("html_"):
                                 art_type = "html"
+                            elif name.startswith("mermaid_"):
+                                art_type = "mermaid"
+                            elif name.startswith("markdown_") or name.startswith("md_"):
+                                art_type = "markdown"
                             
                         elif hasattr(part_data, 'data'):
                             if name.startswith("plot_"):
