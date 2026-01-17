@@ -28,17 +28,6 @@
 - Timeout: kill long-running code after 30 seconds
 - Memory limit: prevent memory exhaustion attacks
 
-## Agent-to-Agent (A2A) Integration
-
-The chatbot is wrapped in an A2A-compatible Agent Executor (`agent_executor.py`) to allow interoperability with other agents.
-
-- **Server**: `a2a_server.py` runs both HTTP and gRPC servers.
-- **Executor**: `AnalyticalChatbotExecutor` wraps the PocketFlow `run_chatbot` function.
-- **Events**: The executor emits A2A events for:
-  - Task status updates (working, completed, failed)
-  - Text messages (streaming support)
-  - Artifacts (generated code, execution output, plots, tables)
-
 ## Flow Design
 
 ### Applicable Design Patterns

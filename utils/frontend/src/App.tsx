@@ -21,6 +21,7 @@ function MermaidChart({ chart }: { chart: string }) {
       setSvg(svg)
     }).catch((error) => {
       console.error("Mermaid error:", error)
+      // Basic error display, maybe improve later
       setSvg(`<div style="color: #ff6b6b; padding: 10px; border: 1px solid #ff6b6b; border-radius: 4px;">Failed to render diagram</div>`)
     })
   }, [chart, id])
@@ -69,16 +70,10 @@ function CodeBlock({ code }: { code: string }) {
   )
 }
 
-interface Artifact {
-  type: string
-  content: string
-}
-
 interface ChatResponse {
   message: string
   code?: string | null
   output?: string | null
-  artifacts?: Record<string, Artifact> | null
   plots?: string[] | null
   tables?: string[] | null
   html?: string[] | null
@@ -205,6 +200,7 @@ export default function App() {
         response
       }])
 
+      // Refresh database info in case tables were saved
       fetchDatabase()
     } catch (e) {
       setMessages(m => [...m, {
@@ -233,67 +229,20 @@ export default function App() {
     }
 
     const resp = msg.response
-    const artifacts = resp?.artifacts || {}
-
     return (
       <div className="msg assistant" key={index}>
         <div className="msg-content">
+          {/* Message text with Mermaid support */}
           {msg.content && (
             <ReactMarkdown
               remarkPlugins={[remarkGfm]}
               components={{
                 code(props) {
                   const {children, className, node, ...rest} = props
-                  const content = String(children).replace(/\n$/, '')
-                  
-                  // Check for Mermaid
-                  const matchMermaid = /language-mermaid|mermaid/.exec(className || '')
-                  if (matchMermaid) {
-                    return <MermaidChart chart={content} />
+                  const match = /language-(\w+)/.exec(className || '')
+                  if (match && match[1] === 'mermaid') {
+                    return <MermaidChart chart={String(children).replace(/\n$/, '')} />
                   }
-                  
-                  // Check for Artifact Tags (e.g., table table_123, plot plot_456)
-                  // The backend sends them as ```type id```
-                  // Markdown parser might see them as code blocks if they were wrapped in backticks
-                  // Or if the language class is set to the type
-                  
-                  // Helper: check if we have a match in artifacts
-                  const matchTag = /^(table|plot|html|svg)\s+([a-zA-Z0-9_]+)$/.exec(content.trim())
-                  
-                  if (matchTag) {
-                    const type = matchTag[1]
-                    const id = matchTag[2]
-                    const artifact = artifacts[id]
-                    
-                    if (artifact) {
-                      if (type === 'table' && artifact.type === 'table') {
-                        return <div className="table-container" dangerouslySetInnerHTML={{ __html: artifact.content }} />
-                      }
-                      if ((type === 'plot' || type === 'svg') && (artifact.type === 'plot' || artifact.type === 'svg')) {
-                        return <img src={`data:image/svg+xml;base64,${artifact.content}`} alt="Plot" className="plot-image" />
-                      }
-                      if (type === 'html' && artifact.type === 'html') {
-                         return (
-                            <div className="dashboard-container">
-                              <div className="dashboard-header">Interactive Output</div>
-                              <iframe
-                                title={`Dashboard ${id}`}
-                                srcDoc={artifact.content}
-                                style={{
-                                  width: '100%',
-                                  height: '500px',
-                                  border: 'none',
-                                  backgroundColor: 'white',
-                                  borderRadius: '4px'
-                                }}
-                                sandbox="allow-scripts"
-                              />
-                            </div>
-                         )
-                      }
-                    }
-                  }
-
                   return (
                     <code {...rest} className={className}>
                       {children}
@@ -306,8 +255,56 @@ export default function App() {
             </ReactMarkdown>
           )}
 
-          {/* Fallback: Render artifacts that were NOT referenced in text (optional, or just render code/output) */}
-          
+          {/* Tables */}
+          {resp?.tables && resp.tables.length > 0 && (
+            <div className="tables">
+              {resp.tables.map((tableHtml, i) => (
+                <div
+                  key={i}
+                  className="table-container"
+                  dangerouslySetInnerHTML={{ __html: tableHtml }}
+                />
+              ))}
+            </div>
+          )}
+
+          {/* Plots */}
+          {resp?.plots && resp.plots.length > 0 && (
+            <div className="plots">
+              {resp.plots.map((plot, i) => (
+                <img
+                  key={i}
+                  src={`data:image/svg+xml;base64,${plot}`}
+                  alt={`Plot ${i + 1}`}
+                  className="plot-image"
+                />
+              ))}
+            </div>
+          )}
+
+          {/* HTML Dashboards */}
+          {resp?.html && resp.html.length > 0 && (
+            <div className="html-dashboards">
+              {resp.html.map((htmlContent, i) => (
+                <div key={i} className="dashboard-container">
+                  <div className="dashboard-header">Interactive Dashboard {i + 1}</div>
+                  <iframe
+                    title={`Dashboard ${i + 1}`}
+                    srcDoc={htmlContent}
+                    style={{
+                      width: '100%',
+                      height: '500px',
+                      border: 'none',
+                      backgroundColor: 'white',
+                      borderRadius: '4px'
+                    }}
+                    sandbox="allow-scripts"
+                  />
+                </div>
+              ))}
+            </div>
+          )}
+
           {/* Code block (collapsible) */}
           {resp?.code && (
             <CodeBlock code={resp.code} />

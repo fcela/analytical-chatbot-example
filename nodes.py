@@ -1,9 +1,9 @@
-"""Node definitions for the analytical chatbot."""
+"Node definitions for the analytical chatbot."
 
 import re
 import yaml
 from pocketflow import Node
-from utils import call_llm, execute_sandboxed_code, parse_code_block
+from utils import call_llm, parse_code_block
 
 # Try to import database utilities
 try:
@@ -18,26 +18,21 @@ class GetInputNode(Node):
     """Receives user message and initializes the processing context."""
 
     def prep(self, shared):
-        # Input comes from web request, already in shared
         return shared.get("user_message", "")
 
     def exec(self, user_message):
-        # No processing needed, just pass through
         return user_message
 
     def post(self, shared, prep_res, exec_res):
-        # Ensure user_message is set
         if not exec_res:
             shared["response"] = {
                 "message": "I didn't receive a message. How can I help you?",
                 "code": None,
                 "output": None,
-                "plots": None,
-                "tables": None,
-                "html": None,
+                "artifacts": {},
                 "error": None
             }
-            return "output"  # Skip to output
+            return "output"
         return "default"
 
 
@@ -47,30 +42,26 @@ class ClassifyIntentNode(Node):
     def prep(self, shared):
         user_message = shared.get("user_message", "")
         chat_history = shared.get("chat_history", [])
-        uploaded_files = shared.get("uploaded_files", {})
+        uploaded_files = shared.get("uploaded_files", {}) # Now just metadata
 
-        # Get file info for context
         file_info = []
-        for fname, df in uploaded_files.items():
-            if hasattr(df, 'columns'):
-                file_info.append(f"- {fname}: columns={list(df.columns)}, rows={len(df)}")
-            else:
-                file_info.append(f"- {fname}: data available")
+        for fname, meta in uploaded_files.items():
+            # meta might be {"size": 1234}
+            file_info.append(f"- {fname}")
 
         return {
             "message": user_message,
-            "history": chat_history[-6:],  # Last 3 exchanges
+            "history": chat_history[-6:],
             "files": file_info
         }
 
     def exec(self, prep_res):
         files_desc = "\n".join(prep_res["files"]) if prep_res["files"] else "None"
 
-        # Format history for context
         history_text = ""
         for msg in prep_res["history"]:
             role = msg.get("role", "unknown")
-            content = msg.get("content", "")[:200]  # Truncate
+            content = msg.get("content", "")[:200]
             history_text += f"{role}: {content}\n"
 
         prompt = f"""Classify the user's intent based on their message.
@@ -86,16 +77,12 @@ Recent conversation:
 Current user message: {prep_res["message"]}
 
 Determine if the user wants:
-- "conversation": General chat, greetings, questions about the bot, clarifications,
-  asking what you can do, etc.
-- "code_execution": Data analysis, calculations, statistics, visualizations,
-  working with uploaded data, mathematical operations, generating charts/plots,
-  INTERACTIVE DASHBOARDS, HTML visualization,
-  DATABASE QUERIES, SQL operations, querying tables, summarizing data,
-  showing table contents, any request involving the database tables.
+- \"conversation\": General chat, greetings, questions about the bot.
+- \"code_execution\": Data analysis, calculations, statistics, visualizations,
+  working with uploaded data, generating charts/plots, database queries.
 
 IMPORTANT: Any request to query, summarize, describe contents, show data, or analyze
-the database tables (employees, products, sales, customers) should be "code_execution".
+the database tables should be \"code_execution\".
 
 Respond in YAML format:
 ```yaml
@@ -104,23 +91,13 @@ reason: brief explanation
 ```"""
 
         response = call_llm(prompt)
-
-        # Parse YAML response
         yaml_str = response.split("```yaml")[1].split("```")[0].strip() \
             if "```yaml" in response else response
         result = yaml.safe_load(yaml_str)
 
-        if not isinstance(result, dict):
-            # If the LLM refused or returned plain text, raise error to trigger retry
-            raise ValueError(f"Invalid output format (expected YAML dict, got {type(result)}): {response}")
-
-        # Handle case where keys are missing or intent is invalid
-        if "intent" not in result:
-             raise ValueError(f"Missing 'intent' key in response: {response}")
+        if not isinstance(result, dict) or "intent" not in result:
+             raise ValueError(f"Invalid response: {response}")
              
-        if result["intent"] not in ["conversation", "code_execution"]:
-             raise ValueError(f"Invalid intent '{result.get('intent')}' in response: {response}")
-
         return result
 
     def post(self, shared, prep_res, exec_res):
@@ -140,27 +117,18 @@ class ConversationResponseNode(Node):
 
     def exec(self, prep_res):
         files_list = ", ".join(prep_res["files"]) if prep_res["files"] else "no files uploaded yet"
-
-        # Get database info
-        db_info = ""
-        if HAS_DUCKDB:
-            db_info = """
-- Query the built-in DuckDB database with SQL (tables: employees, products, sales, customers)"""
+        db_info = "\n- Query the built-in DuckDB database" if HAS_DUCKDB else ""
 
         system_prompt = f"""You are a helpful analytical assistant. You can:
 - Have friendly conversations
 - Analyze data when users upload CSV/JSON files
 - Generate Python code for calculations and visualizations
 - Create charts and plots using Altair{db_info}
-- Create diagrams using Mermaid.js syntax (wrap in ```mermaid code blocks)
 
 Currently uploaded files: {files_list}
-Database: {"Available (employees, products, sales, customers tables)" if HAS_DUCKDB else "Not available"}
 
-Be helpful, concise, and friendly. If the user asks what you can do, explain your
-analytical capabilities including the database tables."""
+Be helpful, concise, and friendly."""
 
-        # Build messages from history
         messages = []
         for msg in prep_res["history"]:
             messages.append({
@@ -181,9 +149,7 @@ analytical capabilities including the database tables."""
             "message": exec_res,
             "code": None,
             "output": None,
-            "plots": None,
-            "tables": None,
-            "html": None,
+            "artifacts": {},
             "error": None
         }
         return "output"
@@ -194,33 +160,20 @@ class GenerateCodeNode(Node):
 
     def prep(self, shared):
         user_message = shared.get("user_message", "")
-        uploaded_files = shared.get("uploaded_files", {})
+        uploaded_files = shared.get("uploaded_files", {}) # Metadata
         chat_history = shared.get("chat_history", [])[-6:]
 
-        # Build detailed file descriptions
         file_descriptions = []
         file_vars = {}
 
-        for fname, df in uploaded_files.items():
-            # Calculate variable name exactly as ExecuteCodeNode does
+        for fname in uploaded_files.keys():
             var_name = fname.rsplit('.', 1)[0].replace(' ', '_').replace('-', '_')
             file_vars[fname] = var_name
-
-            # Support both Polars and Pandas DataFrames
-            if hasattr(df, 'schema'):  # Polars DataFrame
-                desc = f"""File: {fname} (Available as Polars DataFrame variable: {var_name})
-  Columns: {df.columns}
-  Schema: {df.schema}
-  Shape: ({df.height}, {df.width})
-  Sample values: {df.head(2).to_dicts()}"""
-                file_descriptions.append(desc)
-            elif hasattr(df, 'columns') and hasattr(df, 'dtypes'):  # Pandas DataFrame
-                desc = f"""File: {fname} (Available as Pandas DataFrame variable: {var_name})
-  Columns: {list(df.columns)}
-  Types: {df.dtypes.to_dict()}
-  Shape: {df.shape}
-  Sample values: {df.head(2).to_dict()}"""
-                file_descriptions.append(desc)
+            # Since we don't have the DF here (it's in the kernel), we just describe it generically
+            # Ideally, the kernel could return schema metadata upon loading.
+            # For now, we tell LLM it exists.
+            desc = f"File: {fname} (Loaded as Polars DataFrame variable: {var_name})"
+            file_descriptions.append(desc)
 
         return {
             "message": user_message,
@@ -230,93 +183,44 @@ class GenerateCodeNode(Node):
         }
 
     def exec(self, prep_res):
-        files_desc = "\n\n".join(prep_res["files"]) if prep_res["files"] else "No files uploaded"
-
-        # Construct explicit variable list string
+        files_desc = "\n".join(prep_res["files"]) if prep_res["files"] else "No files uploaded"
         var_list_str = ", ".join([f"{v} (for {k})" for k, v in prep_res["file_vars"].items()])
-
-        # Get database schema if available
         db_schema = get_schema_description() if HAS_DUCKDB else "Database not available"
 
         system_prompt = """You are a Python code generator for data analysis. Generate clean,
 executable Python code that:
-- PREFER Polars (as pl) over Pandas for data manipulation - it's faster and more expressive
-- Use numpy (as np) for numerical operations when needed
-- Use json for JSON serialization when needed
-- Use Altair (as alt) for ALL visualizations - do NOT use matplotlib
-- Use query_db(sql) to query the DuckDB database - returns a Polars DataFrame
-- Use show_table(df) to display DataFrames as nicely formatted tables
-- Use show_html(content) to render HTML content (e.g. interactive dashboards)
+- PREFER Polars (as pl) over Pandas for data manipulation
+- Use Altair (as alt) for ALL visualizations
+- Use query_db(sql) to query the DuckDB database
+- Use show_table(df) to display DataFrames
+- Use show_html(content) to render HTML content
 
 CRITICAL RULES:
-- DataFrames are already loaded as POLARS DataFrames. Use the EXACT variable names provided.
-- Use show_table(df) or show_table(df, "Title") to display DataFrames - this renders them as nice HTML tables
-- Use print() for simple text output (numbers, strings, summaries)
-- For ALL charts: assign to a variable named 'chart' - the system will render it automatically
-- NEVER call .show(), .display(), or .save() on charts - just assign to 'chart' variable
-- Altair works with Polars DataFrames directly - no conversion needed. Use alt.Chart(df)...
-- For INTERACTIVE DASHBOARDS: generate the HTML string (e.g. using altair chart.save(None, format='html') or constructing it) and pass it to show_html(html_str).
-- RESPONSIVENESS: When creating dashboards, ensure they resize with the window. Use `width='container'` in Altair charts and CSS `width: 100%` for HTML containers.
+- DataFrames are PRE-LOADED in the environment. Use the variable names provided.
+- Do NOT try to load files using pl.read_csv(). They are already in variables.
+- Use show_table(df, "Title") to display DataFrames.
+- Use alt.Chart(df)... and ASSIGN to 'chart' variable or just creating it is fine (we capture all Altair charts).
+- Do not call .show() or .save().
 
-DISPLAYING DATA:
-- show_table(df) - Display a DataFrame as a nicely formatted HTML table
-- show_table(df, "Title") - Display with a title header
-- show_html(str) - Display raw HTML content (useful for dashboards)
-- print(df.to_markdown()) - Use this if the user asks for a text report/markdown table to be embedded in the final answer
-- print() - Use for simple values, summaries, or text output
-- Example:
-    df = query_db("SELECT * FROM employees")
-    show_table(df, "All Employees")  # Shows as formatted table
-
-DATABASE QUERIES:
-- Use query_db("SELECT ...") to query the database
-- Results are returned as Polars DataFrames
-- Example: df = query_db("SELECT name, salary FROM employees WHERE salary > 80000")
-- You can combine database queries with uploaded file data
-
-SAVING & LOADING INTERMEDIATE RESULTS:
-- save_table(df, "name") - Save a DataFrame to DuckDB as 'saved_name' table
-- load_table("name") - Load a previously saved table as Polars DataFrame
-- list_saved_tables() - Show all saved tables
-- delete_table("name") - Delete a saved table
-- Use these for multi-step analysis workflows where you need to persist intermediate results
-
-POLARS SYNTAX REMINDERS:
-- Select columns: df.select(['col1', 'col2']) or df.select(pl.col('col1'))
-- Filter rows: df.filter(pl.col('age') > 30)
-- Group by: df.group_by('category').agg(pl.col('value').mean())
-- Sort: df.sort('column', descending=True)
-- Add column: df.with_columns((pl.col('a') + pl.col('b')).alias('sum'))
-- Descriptive stats: df.describe()
-- Value counts: df['column'].value_counts()
-- Null handling: df.drop_nulls() or pl.col('x').fill_null(0)
-
-ALTAIR EXAMPLES:
-  chart = alt.Chart(df).mark_bar().encode(x='category:N', y='count()')
-  chart = alt.Chart(df).mark_bar().encode(alt.X('age:Q', bin=True), y='count()')
-  chart = alt.Chart(df).mark_line().encode(x='date:T', y='value:Q')
-  chart = alt.Chart(df).mark_point().encode(x='x:Q', y='y:Q', color='category:N')"""
+POLARS SYNTAX:
+- Use .group_by() instead of .groupby()"""
 
         prompt = f"""Generate Python code to answer this request: {prep_res["message"]}
 
-Available DataFrames (pre-loaded as Polars): {var_list_str if var_list_str else 'None'}
+Available DataFrames (pre-loaded): {var_list_str if var_list_str else 'None'}
 
-Uploaded File Schema:
+Uploaded Files:
 {files_desc}
 
 {db_schema}
 
-Generate only the Python code, wrapped in ```python``` blocks. Include comments explaining
-each step. Use Polars syntax for data manipulation. Use query_db() for database queries."""
+Generate only the Python code, wrapped in ```python``` blocks."""
 
         response = call_llm(prompt=prompt, system_prompt=system_prompt)
         code = parse_code_block(response)
 
-        # Remove any .show(), .display(), .save() calls that LLM might add
         code = re.sub(r'\.show\s*\([^)]*\)', '', code)
-        code = re.sub(r'\.display\s*\([^)]*\)', '', code)
-        code = re.sub(r'\.save\s*\([^)]*\)', '', code)
-        code = re.sub(r'\bplt\.show\s*\([^)]*\)', '', code)
+        code = re.sub(r'\.groupby\s*\(', '.group_by(', code)
 
         return code
 
@@ -326,27 +230,21 @@ each step. Use Polars syntax for data manipulation. Use query_db() for database 
 
 
 class ExecuteCodeNode(Node):
-    """Executes generated code in a sandboxed environment."""
+    """Executes generated code in the persistent kernel."""
 
     def prep(self, shared):
         code = shared.get("generated_code", "")
-        uploaded_files = shared.get("uploaded_files", {})
-
-        # Prepare context with uploaded data
-        context = {}
-        for fname, df in uploaded_files.items():
-            # Create variable name from filename (remove extension, replace spaces)
-            var_name = fname.rsplit('.', 1)[0].replace(' ', '_').replace('-', '_')
-            context[var_name] = df
-
-        return {"code": code, "context": context}
+        kernel = shared.get("kernel") # SandboxKernel instance
+        return {"code": code, "kernel": kernel}
 
     def exec(self, prep_res):
-        result = execute_sandboxed_code(
-            code=prep_res["code"],
-            context=prep_res["context"],
-            timeout_seconds=30
-        )
+        kernel = prep_res["kernel"]
+        code = prep_res["code"]
+        
+        if not kernel:
+            return {"success": False, "error": "Kernel not initialized"}
+            
+        result = kernel.execute(code)
         return result
 
     def post(self, shared, prep_res, exec_res):
@@ -370,36 +268,30 @@ class FormatResultsNode(Node):
 
         if result.get("success"):
             output = result.get("stdout", "").strip()
-            if output:
-                # Generate a brief explanation
-                prompt = f"""The user asked: {prep_res["user_message"]}
+            artifacts = result.get("artifacts", {})
+            
+            prompt = f"""The user asked: {prep_res["user_message"]}
 
 The following Python code was executed:
 ```python
 {code}
 ```
 
-And produced this output:
+And produced this output (which may contain artifact tags like ```table id``` or ```plot id```):
 {output}
 
-Respond to the user's request using the code execution results.
-- If the user asked for a "report" or detailed analysis, provide a comprehensive answer, including relevant data tables (formatted as Markdown) and analysis.
-- IMPORTANT: Do NOT wrap Markdown tables in code blocks (```). Output them directly so they render as tables.
-- Otherwise, provide a brief (1-2 sentence) natural language summary of the results.
-- Be specific about the numbers/findings.
-- You can also use Mermaid diagrams (```mermaid) if helpful."""
+Respond to the user's request.
+- Integrate the analysis findings into your response.
+- IMPORTANT: The output contains tags like ```table ...``` and ```plot ...```. You MUST INCLUDE these tags in your final response where the table or plot should appear. Do not change them.
+"""
 
-                explanation = call_llm(prompt)
-            else:
-                explanation = "The code executed successfully."
+            explanation = call_llm(prompt)
 
             return {
                 "message": explanation,
                 "code": code,
-                "output": output if output else "Code executed successfully (no output)",
-                "plots": result.get("plots", []),
-                "tables": result.get("tables", []),
-                "html": result.get("html", []),
+                "output": output if output else "Code executed successfully",
+                "artifacts": artifacts,
                 "error": None
             }
         else:
@@ -408,9 +300,7 @@ Respond to the user's request using the code execution results.
                 "message": f"I encountered an error while running the code: {error}",
                 "code": code,
                 "output": None,
-                "plots": None,
-                "tables": None,
-                "html": None,
+                "artifacts": {},
                 "error": error
             }
 
@@ -429,11 +319,9 @@ class OutputResponseNode(Node):
         }
 
     def exec(self, prep_res):
-        # No additional processing needed
         return prep_res
 
     def post(self, shared, prep_res, exec_res):
-        # Update chat history
         if "chat_history" not in shared:
             shared["chat_history"] = []
 
@@ -442,17 +330,12 @@ class OutputResponseNode(Node):
             "content": exec_res["user_message"]
         })
 
-        # Build assistant message content
         response = exec_res["response"]
         assistant_content = response.get("message", "")
-        if response.get("code"):
-            assistant_content += f"\n\n```python\n{response['code']}\n```"
-        if response.get("output"):
-            assistant_content += f"\n\nOutput:\n```\n{response['output']}\n```"
-
+        
         shared["chat_history"].append({
             "role": "assistant",
             "content": assistant_content
         })
 
-        return None  # End of flow
+        return None
