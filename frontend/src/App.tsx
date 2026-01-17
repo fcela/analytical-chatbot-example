@@ -3,7 +3,20 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import mermaid from 'mermaid'
 
-const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000'
+function normalizeApiBase(value: string) {
+  if (value.startsWith('http://') || value.startsWith('https://') || value.startsWith('/')) {
+    return value
+  }
+  return `http://${value}`
+}
+
+const API_BASE = (() => {
+  const envBase = import.meta.env.VITE_API_BASE?.trim()
+  if (envBase) return normalizeApiBase(envBase)
+  if (import.meta.env.DEV) return '/api'
+  if (window.location.protocol === 'file:') return 'http://localhost:8000'
+  return window.location.origin
+})()
 
 // Initialize mermaid
 mermaid.initialize({
@@ -17,7 +30,13 @@ function MermaidChart({ chart }: { chart: string }) {
   const id = useRef(`mermaid-${Math.random().toString(36).substr(2, 9)}`).current
 
   useEffect(() => {
-    mermaid.render(id, chart).then(({ svg }) => {
+    // Strip code fences so mermaid.render receives only diagram syntax.
+    const cleaned = chart
+      .replace(/^\s*```mermaid\s*/i, '')
+      .replace(/\s*```$/, '')
+      .trim()
+    setSvg('')
+    mermaid.render(id, cleaned).then(({ svg }) => {
       setSvg(svg)
     }).catch((error) => {
       console.error("Mermaid error:", error)

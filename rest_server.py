@@ -1,6 +1,9 @@
 """
 REST API Server (BFF) for the Analytical Chatbot.
-Routes user requests to the A2A Backend via gRPC.
+
+This service exists so the React UI can keep using a simple REST API while
+the actual agent runs behind an A2A gRPC interface. It translates REST calls
+into A2A messages and streams back artifacts.
 """
 
 import os
@@ -85,6 +88,8 @@ async def get_client():
     return _client
 
 # --- Session Management ---
+# Sessions are keyed by a cookie and hold the A2A context_id so multi-turn
+# conversations are routed to the same agent session.
 session_store: Dict[str, Dict[str, Any]] = {}
 
 def get_session_id(request: Request, response: Response) -> str:
@@ -124,6 +129,7 @@ async def chat_endpoint(
     context_id = session["context_id"]
 
     try:
+        # Wrap the user's text in an A2A Message so the agent can stream results.
         msg = Message(
             message_id=str(uuid.uuid4()),
             role=MessageRole.user,
@@ -145,7 +151,7 @@ async def chat_endpoint(
         try:
             async for event in client.send_message_streaming(MessageSendParams(message=msg)):
                 
-                # 1. Handle Text Message
+                # 1. Handle text messages emitted by the agent.
                 if hasattr(event, 'role') and hasattr(event, 'parts'):
                     role = event.role
                     if hasattr(role, 'value'): role = role.value
@@ -155,7 +161,7 @@ async def chat_endpoint(
                             if hasattr(part_data, 'text'):
                                 response_data["message"] = part_data.text
                                 
-                # 2. Handle Artifacts
+                # 2. Handle artifacts (code, plots, tables, HTML, Mermaid).
                 artifact = getattr(event, 'artifact', None)
                 if artifact:
                     name = getattr(artifact, "name", "")
@@ -199,7 +205,7 @@ async def chat_endpoint(
                             "content": content
                         }
                             
-                # 3. Handle Task object (final result)
+                # 3. Handle Task object (final result). Streaming already covers most cases.
                 if hasattr(event, 'artifacts') and event.artifacts:
                     for art in event.artifacts:
                         name = getattr(art, "name", "")

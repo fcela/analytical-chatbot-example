@@ -7,7 +7,9 @@ import sys
 import io
 import traceback
 import json
+from decimal import Decimal
 import base64
+import re
 import uuid
 from typing import Any
 from contextlib import redirect_stdout, redirect_stderr
@@ -66,6 +68,7 @@ FORBIDDEN_PATTERNS = [
 ]
 
 def check_safety(code: str) -> tuple[bool, str]:
+    """Lightweight guardrail to block obviously dangerous operations."""
     for pattern in FORBIDDEN_PATTERNS:
         if pattern in code: 
             return False, f"Forbidden pattern: {pattern}"
@@ -77,6 +80,61 @@ def check_safety(code: str) -> tuple[bool, str]:
 # We will use utils.database to get a connection, which will initialize sample data in this process.
 
 _db_conn = None
+
+def _sanitize_vl_spec(value: Any) -> Any:
+    """Convert non-JSON types (e.g., Decimal) in Vega-Lite specs to safe primitives."""
+    if isinstance(value, Decimal):
+        return float(value)
+    if HAS_NUMPY:
+        if isinstance(value, np.integer):
+            return int(value)
+        if isinstance(value, np.floating):
+            return float(value)
+        if isinstance(value, np.ndarray):
+            return value.tolist()
+    if isinstance(value, dict):
+        return {k: _sanitize_vl_spec(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_sanitize_vl_spec(v) for v in value]
+    if isinstance(value, tuple):
+        return [_sanitize_vl_spec(v) for v in value]
+    return value
+
+def _is_safe_artifact_id(value: str) -> bool:
+    return bool(re.fullmatch(r"[A-Za-z0-9_]+", value or ""))
+
+_MERMAID_PREFIXES = (
+    "graph",
+    "flowchart",
+    "sequenceDiagram",
+    "classDiagram",
+    "stateDiagram",
+    "erDiagram",
+    "journey",
+    "gantt",
+    "pie",
+    "mindmap",
+    "timeline",
+    "quadrantChart",
+    "requirementDiagram",
+    "gitGraph",
+)
+
+
+def _looks_like_mermaid(text: str) -> bool:
+    if not isinstance(text, str):
+        return False
+    stripped = text.strip()
+    if stripped.startswith("```mermaid"):
+        stripped = stripped[len("```mermaid"):].strip()
+        if stripped.endswith("```"):
+            stripped = stripped[:-3].strip()
+    for line in stripped.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        return any(line.startswith(prefix) for prefix in _MERMAID_PREFIXES)
+    return False
 
 def get_db_conn():
     global _db_conn
@@ -160,9 +218,10 @@ class KernelWorker:
         Generic display function to render objects as artifacts.
         Registers the artifact and prints the reference tag.
         """
-        art_id = label or self._gen_id("artifact")
+        art_id = label if (label and _is_safe_artifact_id(label)) else None
+        label_text = label if (label and not _is_safe_artifact_id(label)) else None
         
-        # Determine type if not provided
+        # Determine type if not provided so callers can just call display(obj).
         if type is None:
             if HAS_ALTAIR and isinstance(obj, alt.TopLevelMixin):
                 type = "plot"
@@ -173,6 +232,9 @@ class KernelWorker:
                 type = "html"
             else:
                 type = "text"
+        # Automatically tag Mermaid strings so the UI renders them.
+        if type == "text" and _looks_like_mermaid(obj):
+            type = "mermaid"
 
         content = None
         tag_type = type
@@ -181,7 +243,8 @@ class KernelWorker:
             # Convert Altair to SVG
             if HAS_ALTAIR and HAS_VL_CONVERT and isinstance(obj, alt.TopLevelMixin):
                 try:
-                    svg_data = vlc.vegalite_to_svg(vl_spec=obj.to_dict())
+                    vl_spec = _sanitize_vl_spec(obj.to_dict())
+                    svg_data = vlc.vegalite_to_svg(vl_spec=vl_spec)
                     content = base64.b64encode(svg_data.encode('utf-8')).decode('utf-8')
                     self.seen_plots.add(id(obj))
                 except Exception as e:
@@ -227,14 +290,17 @@ class KernelWorker:
 
         if content:
             # Ensure ID is safe
-            if type == "plot" and not label:
+            if type == "plot" and not art_id:
                 art_id = self._gen_id("plot")
-            elif type == "table" and not label:
+            elif type == "table" and not art_id:
                 art_id = self._gen_id("table")
-            elif not label:
+            elif not art_id:
                 art_id = self._gen_id(type)
-                
+
+            # Store artifacts and emit a tag that the LLM response should include.
             self.artifacts[art_id] = {"type": tag_type, "content": content}
+            if label_text and type != "table":
+                print(label_text)
             print(f"\n```{tag_type} {art_id}```\n")
 
     def show_table(self, df, title: str = None):
@@ -256,7 +322,8 @@ class KernelWorker:
                         continue
                         
                     try:
-                        svg_data = vlc.vegalite_to_svg(vl_spec=val.to_dict())
+                        vl_spec = _sanitize_vl_spec(val.to_dict())
+                        svg_data = vlc.vegalite_to_svg(vl_spec=vl_spec)
                         b64_svg = base64.b64encode(svg_data.encode('utf-8')).decode('utf-8')
                         
                         art_id = self._gen_id("plot")
@@ -284,9 +351,15 @@ class KernelWorker:
                 self.pipe.send({'status': 'fatal_error', 'error': str(e)})
 
     def execute_code(self, code):
+        # Reset per-execution artifact state while keeping the kernel namespace.
         self.artifacts = {} 
         self.namespace['artifacts'] = self.artifacts
-        self.seen_plots = set() # Reset seen plots for new execution
+        pre_existing_plots = set()
+        if HAS_ALTAIR:
+            for val in self.namespace.values():
+                if isinstance(val, alt.TopLevelMixin):
+                    pre_existing_plots.add(id(val))
+        self.seen_plots = pre_existing_plots
         
         stdout_buffer = io.StringIO()
         stderr_buffer = io.StringIO()

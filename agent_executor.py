@@ -43,9 +43,9 @@ class AnalyticalChatbotExecutor(AgentExecutor):
 
         if context_id not in self._sessions:
             self._sessions[context_id] = {
-                "files": {}, # Metadata only
+                "files": {}, # Metadata only (actual data lives inside the kernel).
                 "history": [],
-                "kernel": SandboxKernel() # Persistent kernel
+                "kernel": SandboxKernel() # Persistent kernel per conversation.
             }
 
         return self._sessions[context_id]
@@ -100,7 +100,7 @@ class AnalyticalChatbotExecutor(AgentExecutor):
         event_queue: EventQueue
     ) -> None:
         """Execute the analytical chatbot flow for the incoming request."""
-        # Get session data for multi-turn conversations
+        # Get session data for multi-turn conversations.
         message = context.message
         context_id = getattr(message, "context_id", getattr(message, "contextId", None)) if message else None
         session = self._get_session(context_id)
@@ -108,7 +108,7 @@ class AnalyticalChatbotExecutor(AgentExecutor):
         # Get task ID safely
         task_id = context.task_id
 
-        # Process message: extract text and load files
+        # Process message: extract text and load files into the kernel.
         user_message = self._process_incoming_message(context, session)
 
         # If files were uploaded but no text message
@@ -132,7 +132,7 @@ class AnalyticalChatbotExecutor(AgentExecutor):
             )
             return
 
-        # Send status update: working
+        # Send status update: working (streaming clients can show a spinner).
         await event_queue.enqueue_event(
             TaskStatusUpdateEvent(
                 task_id=task_id,
@@ -160,8 +160,8 @@ class AnalyticalChatbotExecutor(AgentExecutor):
                 )
                 return
 
-            # Run the chatbot flow
-            # We pass the KERNEL, not the raw files
+            # Run the chatbot flow on a thread pool to avoid blocking the event loop.
+            # We pass the kernel, not the raw file data, so the code can access loaded tables.
             result = await asyncio.get_event_loop().run_in_executor(
                 None,
                 lambda: run_chatbot(
