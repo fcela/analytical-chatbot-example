@@ -258,7 +258,7 @@ export default function App() {
                   // Or if the language class is set to the type
                   
                   // Helper: check if we have a match in artifacts
-                  const matchTag = /^(table|plot|html|svg)\s+([a-zA-Z0-9_]+)$/.exec(content.trim())
+                  const matchTag = /^(table|plot|html|svg|mermaid|markdown)\s+([a-zA-Z0-9_]+)$/.exec(content.trim())
                   
                   if (matchTag) {
                     const type = matchTag[1]
@@ -290,6 +290,12 @@ export default function App() {
                               />
                             </div>
                          )
+                      }
+                      if (type === 'mermaid' && artifact.type === 'mermaid') {
+                        return <MermaidChart chart={artifact.content} />
+                      }
+                      if (type === 'markdown' && artifact.type === 'markdown') {
+                         return <ReactMarkdown remarkPlugins={[remarkGfm]}>{artifact.content}</ReactMarkdown>
                       }
                     }
                   }
