@@ -192,18 +192,13 @@ executable Python code that:
 - PREFER Polars (as pl) over Pandas for data manipulation
 - Use Altair (as alt) for ALL visualizations
 - Use query_db(sql) to query the DuckDB database
-- Use show_table(df) to display DataFrames
-- Use show_html(content) to render HTML content
+- Use display(obj, label=None) to show DataFrames, Plots (Altair charts), HTML, or Mermaid diagrams.
+- You can also use show_table(df) and show_html(html) as shorthands.
 
-CRITICAL RULES:
-- DataFrames are PRE-LOADED in the environment. Use the variable names provided.
-- Do NOT try to load files using pl.read_csv(). They are already in variables.
-- Use show_table(df, "Title") to display DataFrames.
-- Use alt.Chart(df)... and ASSIGN to 'chart' variable or just creating it is fine (we capture all Altair charts).
-- Do not call .show() or .save().
-
-POLARS SYNTAX:
-- Use .group_by() instead of .groupby()"""
+RICH REPORTING:
+- You can create complex reports by calling display() multiple times.
+- Each display() call prints a tag like ```type id``` which will be replaced by the actual content in the final output.
+- You can mix print statements (for text) with display() calls (for rich artifacts)."""
 
         prompt = f"""Generate Python code to answer this request: {prep_res["message"]}
 

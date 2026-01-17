@@ -120,6 +120,7 @@ class KernelWorker:
         self.pipe = pipe
         self.namespace = {}
         self.artifacts = {}
+        self.seen_plots = set()
         self._init_namespace()
 
     def _init_namespace(self):
@@ -147,50 +148,124 @@ class KernelWorker:
         
         # Add helper functions
         self.namespace['show_table'] = self.show_table
-        self.namespace['display'] = self.show_table
+        self.namespace['display'] = self.display
         self.namespace['show_html'] = self.show_html
         self.namespace['artifacts'] = self.artifacts
 
     def _gen_id(self, prefix):
         return f"{prefix}_{str(uuid.uuid4())[:8]}"
 
-    def show_table(self, df, title: str = None):
-        if HAS_POLARS and isinstance(df, pl.DataFrame):
-            df_html = df.to_pandas()
-        elif hasattr(df, 'to_pandas'):
-            df_html = df.to_pandas()
+    def display(self, obj, type=None, label=None):
+        """
+        Generic display function to render objects as artifacts.
+        Registers the artifact and prints the reference tag.
+        """
+        art_id = label or self._gen_id("artifact")
+        
+        # Determine type if not provided
+        if type is None:
+            if HAS_ALTAIR and isinstance(obj, alt.TopLevelMixin):
+                type = "plot"
+            elif (HAS_PANDAS and isinstance(obj, pd.DataFrame)) or \
+                 (HAS_POLARS and isinstance(obj, pl.DataFrame)):
+                type = "table"
+            elif hasattr(obj, '_repr_html_'):
+                type = "html"
+            else:
+                type = "text"
+
+        content = None
+        tag_type = type
+
+        if type == "plot":
+            # Convert Altair to SVG
+            if HAS_ALTAIR and HAS_VL_CONVERT and isinstance(obj, alt.TopLevelMixin):
+                try:
+                    svg_data = vlc.vegalite_to_svg(vl_spec=obj.to_dict())
+                    content = base64.b64encode(svg_data.encode('utf-8')).decode('utf-8')
+                    self.seen_plots.add(id(obj))
+                except Exception as e:
+                    print(f"Error converting plot: {e}")
+                    return
+            else:
+                # Fallback or other plot types
+                print(f"Unsupported plot object: {type(obj)}")
+                return
+
+        elif type == "table":
+            # Table conversion logic
+            if HAS_POLARS and isinstance(obj, pl.DataFrame):
+                df_html = obj.to_pandas()
+            elif hasattr(obj, 'to_pandas'):
+                df_html = obj.to_pandas()
+            else:
+                df_html = obj
+                
+            if hasattr(df_html, 'to_html'):
+                content = df_html.to_html(index=False, classes='data-table', border=0, na_rep='-')
+                if label: 
+                    # If label is provided, maybe add it as title in HTML?
+                    # For now, we use label as ID, so maybe we want a separate title param.
+                    # Reusing existing pattern:
+                    content = f'<div class="table-title">{label}</div>\n{content}'
+                    art_id = self._gen_id("table") # Generate random ID to avoid collision if label is not unique or safe
+            else:
+                content = str(obj)
+
+        elif type == "html":
+             content = obj._repr_html_() if hasattr(obj, '_repr_html_') else str(obj)
+        
+        elif type == "mermaid":
+            content = str(obj)
+        
+        elif type == "markdown" or type == "md":
+            content = str(obj)
+            tag_type = "markdown"
+
         else:
-            df_html = df
-            
-        if hasattr(df_html, 'to_html'):
-            html = df_html.to_html(index=False, classes='data-table', border=0, na_rep='-')
-            if title: html = f'<div class="table-title">{title}</div>\n{html}'
-            
-            art_id = self._gen_id("table")
-            self.artifacts[art_id] = {"type": "table", "content": html}
-            print(f"\n```table {art_id}```\n")
+            content = str(obj)
+
+        if content:
+            # Ensure ID is safe
+            if type == "plot" and not label:
+                art_id = self._gen_id("plot")
+            elif type == "table" and not label:
+                art_id = self._gen_id("table")
+            elif not label:
+                art_id = self._gen_id(type)
+                
+            self.artifacts[art_id] = {"type": tag_type, "content": content}
+            print(f"\n```{tag_type} {art_id}```\n")
+
+    def show_table(self, df, title: str = None):
+        """Legacy wrapper for display(df, type='table')."""
+        self.display(df, type='table', label=title)
 
     def show_html(self, content: str):
-        art_id = self._gen_id("html")
-        self.artifacts[art_id] = {"type": "html", "content": str(content)}
-        print(f"\n```html {art_id}```\n")
+        """Legacy wrapper for display(content, type='html')."""
+        self.display(content, type='html')
 
     def capture_plots(self):
-        """Capture Altair plots from namespace."""
+        """Capture all Altair plots from namespace that haven't been displayed."""
+        output_tags = []
         if HAS_ALTAIR and HAS_VL_CONVERT:
             for name, val in list(self.namespace.items()):
                 if name.startswith('_'): continue
                 if isinstance(val, alt.TopLevelMixin):
+                    if id(val) in self.seen_plots:
+                        continue
+                        
                     try:
                         svg_data = vlc.vegalite_to_svg(vl_spec=val.to_dict())
                         b64_svg = base64.b64encode(svg_data.encode('utf-8')).decode('utf-8')
                         
                         art_id = self._gen_id("plot")
                         self.artifacts[art_id] = {"type": "plot", "content": b64_svg}
-                        return f"\n```plot {art_id}```\n" 
+                        self.seen_plots.add(id(val))
+                        output_tags.append(f"\n```plot {art_id}```\n") 
                     except Exception:
                         pass
-        return ""
+        return "".join(output_tags)
 
     def run(self):
         """Main loop waiting for commands."""
@@ -211,6 +286,7 @@ class KernelWorker:
     def execute_code(self, code):
         self.artifacts = {} 
         self.namespace['artifacts'] = self.artifacts
+        self.seen_plots = set() # Reset seen plots for new execution
         
         stdout_buffer = io.StringIO()
         stderr_buffer = io.StringIO()
@@ -227,9 +303,9 @@ class KernelWorker:
             with redirect_stdout(stdout_buffer), redirect_stderr(stderr_buffer):
                 exec(code, self.namespace)
             
-            plot_tag = self.capture_plots()
-            if plot_tag:
-                stdout_buffer.write(plot_tag)
+            plot_tags = self.capture_plots()
+            if plot_tags:
+                stdout_buffer.write(plot_tags)
                 
             success = True
         except Exception as e:
