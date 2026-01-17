@@ -31,7 +31,7 @@ except ImportError:
     def list_saved_tables():
         return []
 
-from flow import run_chatbot
+from utils.flow import run_chatbot
 from utils.call_llm import get_provider_info
 
 # --- Data Models ---

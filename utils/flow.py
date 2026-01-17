@@ -1,7 +1,7 @@
 """Flow orchestration for the analytical chatbot."""
 
 from pocketflow import Flow
-from nodes import (
+from utils.nodes import (
     GetInputNode,
     ClassifyIntentNode,
     ConversationResponseNode,
@@ -33,6 +33,8 @@ def create_chatbot_flow() -> Flow:
     generate_code >> execute_code
     execute_code >> format_results
     format_results >> output_response
+    # Retry code generation when execution fails (see ExecuteCodeNode.post).
+    execute_code - "retry" >> generate_code
 
     get_input - "output" >> output_response
 

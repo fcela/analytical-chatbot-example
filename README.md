@@ -1,41 +1,41 @@
-# Analytical Chatbot (PocketFlow + FastAPI + React)
+# Analytical Chatbot (PocketFlow + A2A + React)
 
-A web-based chatbot built with PocketFlow that can analyze uploaded CSV/JSON files and execute Python code in a sandboxed environment.
+A web-based chatbot built with PocketFlow that can analyze uploaded CSV/JSON files, execute Python code in a sandboxed kernel, and stream results back over the A2A protocol (HTTP/JSON-RPC and gRPC).
 
 ## Architecture
 
-- **Backend**: Starlette/FastAPI application implementing the **Agent-to-Agent (A2A)** protocol (`a2a_server.py`, `agent_executor.py`)
-- **Legacy API**: FastAPI compatibility layer (`legacy_routes.py`) for the frontend
-- **Flow Control**: PocketFlow for LLM orchestration (`flow.py`, `nodes.py`)
+- **A2A Backend**: HTTP/JSON-RPC + gRPC servers (`a2a_server.py`, `agent_executor.py`)
+- **BFF REST API**: UI-facing REST service that bridges to A2A gRPC (`rest_server.py`)
+- **Flow Control**: PocketFlow orchestration (`utils/flow.py`, `utils/nodes.py`)
+- **Sandbox**: Multiprocessing Python kernel with a restricted namespace (`utils/sandbox.py`, `utils/kernel.py`)
 - **Frontend**: React + Vite + TypeScript
-- **LLM Providers**: OpenAI, Anthropic (Claude), or Ollama (local)
-- **Sandbox**: Thread-based Python execution with timeout and security restrictions
+
+```
+Browser (React)  ->  BFF REST (8000)  ->  A2A gRPC (50051)
+                                        |-> A2A HTTP/JSON-RPC (8001)
+```
 
 ## Project Structure
 
 ```
-chatbot/
-├── a2a_server.py       # A2A Server setup (HTTP & gRPC)
-├── agent_executor.py   # A2A Agent Executor implementation
-├── legacy_routes.py    # Legacy REST API for frontend compatibility
-├── api.py              # (Deprecated) Original FastAPI endpoints
-├── main.py             # Entry point (runs A2A server)
-├── nodes.py            # PocketFlow node definitions
-├── flow.py             # Flow orchestration
+analytical-chatbot-example/
+├── a2a_server.py       # A2A server setup (HTTP + gRPC)
+├── agent_executor.py   # A2A AgentExecutor (PocketFlow wrapper)
+├── rest_server.py      # REST BFF for the React UI
+├── main.py             # Launches backend + BFF
+├── utils/nodes.py      # PocketFlow node definitions
+├── utils/flow.py       # Flow orchestration
 ├── utils/
-│   ├── call_llm.py     # LLM wrapper with retry/mock support
-│   ├── sandbox.py      # Sandboxed code execution
-│   └── parse_code.py   # Code block extraction
+│   ├── kernel.py       # Sandboxed kernel worker (artifacts)
+│   ├── sandbox.py      # Kernel process manager
+│   ├── database.py     # DuckDB helpers
+│   └── call_llm.py      # LLM wrapper
 ├── frontend/
-│   ├── src/
-│   │   ├── App.tsx     # React app
-│   │   ├── main.tsx    # Entry point
-│   │   └── style.css   # Styles
-│   ├── package.json
-│   └── vite.config.ts
+│   ├── src/App.tsx     # React app
+│   ├── src/style.css   # Styles
+│   └── vite.config.ts  # Dev proxy to BFF
 ├── docs/
-│   └── documentation.html  # Technical documentation
-├── Makefile
+│   └── design.md       # Architecture/design notes
 └── requirements.txt
 ```
 
@@ -44,16 +44,11 @@ chatbot/
 ### 1. Install dependencies
 
 ```bash
-# Backend
 pip install -r requirements.txt
-
-# Frontend
 cd frontend && npm install && cd ..
 ```
 
 ### 2. Set environment variables
-
-Choose your LLM provider:
 
 ```bash
 # Option A: OpenAI (default)
@@ -64,48 +59,33 @@ export OPENAI_API_KEY='your-key'
 export LLM_PROVIDER='anthropic'
 export ANTHROPIC_API_KEY='your-key'
 
-# Option C: Ollama (local, no API key needed)
+# Option C: Ollama (local)
 export LLM_PROVIDER='ollama'
-export OLLAMA_MODEL='qwen3:4b'  # or any model you have installed
+export OLLAMA_MODEL='qwen3:4b'
 
-# Option D: Mock mode (for testing without any LLM)
+# Option D: Mock LLM
 export MOCK_LLM='true'
 ```
 
-### 3. Start the servers
+### 3. Start the services
 
-**Option A: Using Make**
 ```bash
-make start-backend   # Terminal 1: FastAPI on port 8000
-make start-frontend  # Terminal 2: Vite on port 5173
-```
-
-**Option B: Manual**
-```bash
-# Terminal 1
+# Starts A2A backend (HTTP 8001 + gRPC 50051) and BFF REST (8000)
 python main.py
 
-# Terminal 2
+# In another terminal
 cd frontend && npm run dev
 ```
 
 ### 4. Open the app
 
-Navigate to http://localhost:5173 in your browser.
+Navigate to http://localhost:5173.
 
-## Agent-to-Agent (A2A) Protocol
+## A2A Protocol Endpoints
 
-This agent implements the A2A protocol, allowing it to be discovered and used by other agents.
-
-- **Agent Card**: `http://localhost:8000/.well-known/agent-card.json`
-- **HTTP/JSON-RPC Endpoint**: `http://localhost:8000/messages`
-- **gRPC Endpoint**: `localhost:50051` (if enabled)
-
-The agent supports the following skills:
-- `data-analysis`: Analyze uploaded CSV/JSON files
-- `code-generation`: Generate Python code (Polars/Altair)
-- `visualization`: Create charts and plots
-- `database-query`: Query the built-in DuckDB database
+- **Agent Card**: `http://localhost:8001/.well-known/agent-card.json`
+- **HTTP/JSON-RPC**: `http://localhost:8001/messages`
+- **gRPC**: `localhost:50051`
 
 ## Environment Variables
 
@@ -113,71 +93,47 @@ The agent supports the following skills:
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `LLM_PROVIDER` | Provider to use (`openai`, `anthropic`, `ollama`) | `openai` |
-| `MOCK_LLM` | Force mock responses for testing | `false` |
-| `LLM_TEMPERATURE` | Temperature for generation | `0.7` |
+| `LLM_PROVIDER` | Provider (`openai`, `anthropic`, `ollama`) | `openai` |
+| `MOCK_LLM` | Force mock responses | `false` |
+| `LLM_TEMPERATURE` | Generation temperature | `0.7` |
 | `LLM_DEBUG` | Enable debug logging | `false` |
 
 ### Provider-Specific Variables
 
-**OpenAI:**
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `OPENAI_API_KEY` | OpenAI API key | Required |
-| `OPENAI_MODEL` | Model to use | `gpt-4o` |
+**OpenAI:** `OPENAI_API_KEY`, `OPENAI_MODEL` (default `gpt-4o`)
 
-**Anthropic (Claude):**
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `ANTHROPIC_API_KEY` | Anthropic API key | Required |
-| `ANTHROPIC_MODEL` | Model to use | `claude-sonnet-4-20250514` |
-| `ANTHROPIC_MAX_TOKENS` | Max tokens for response | `4096` |
+**Anthropic:** `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL` (default `claude-sonnet-4-20250514`)
 
-**Ollama (Local):**
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `OLLAMA_MODEL` | Model to use | `qwen3:4b` |
-| `LLM_TIMEOUT` | Timeout for generation (seconds) | `120` |
+**Ollama:** `OLLAMA_MODEL` (default `qwen3:4b`), `LLM_TIMEOUT` (seconds)
 
 ### Server Configuration
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `HOST` | Backend host | `0.0.0.0` |
-| `PORT` | Backend port | `8000` |
+| `BACKEND_HOST` | A2A host | `0.0.0.0` |
+| `BACKEND_HTTP_PORT` | A2A HTTP port | `8001` |
+| `BACKEND_GRPC_PORT` | A2A gRPC port | `50051` |
+| `HOST` | BFF host | `0.0.0.0` |
+| `PORT` | BFF port | `8000` |
 
 ## Features
 
-- **Intent Classification**: Automatically detects if user wants conversation or code execution
-- **Code Generation**: Generates Python code for data analysis tasks (preferring Polars and Altair)
-- **Sandboxed Execution**: Runs code with security restrictions and timeout
-- **Formatted Tables**: Display DataFrames as styled HTML tables using `show_table()`
-- **Interactive Dashboards**: Create responsive HTML dashboards using `show_html()`
-- **Mermaid Diagrams**: Support for rendering flowcharts, sequence diagrams, and more via Mermaid syntax
-- **High-Quality Plots**: Renders Altair charts as crisp SVG vectors
-- **File Upload**: Supports CSV and JSON file uploads
-- **Built-in Database**: Query pre-loaded DuckDB tables (employees, products, sales, customers)
-- **Session Management**: Cookie-based sessions with in-memory storage
-- **Clean UI**: Markdown support and collapsible code/output blocks for a better chat experience
+- **Intent Classification**: routes between conversation and code execution
+- **Code Generation**: Polars + Altair-first Python generation
+- **Sandboxed Execution**: persistent kernel with timeout and safety checks
+- **Artifacts**: tables, plots, HTML dashboards, Mermaid diagrams
+- **Database**: DuckDB tables (employees, products, sales, customers)
+- **A2A Streaming**: status updates + artifacts over gRPC
 
 ## Sandbox Environment
 
-The sandbox provides a restricted execution environment with pre-loaded data science tools:
-- **Polars** (`pl`): High-performance data manipulation (preferred)
-- **Pandas** (`pd`): Traditional DataFrame library
-- **NumPy** (`np`): Numerical computing
-- **Altair** (`alt`): Declarative statistical visualization
-- **Statsmodels** (`sm`, `smf`): Statistical modeling and econometrics
-- **DuckDB**: SQL query interface via `query_db()` function
-- **Helper Functions**: `show_table()` for HTML tables, `show_html()` for dashboards
-- **Standard Libs**: `math`, `statistics`, `json`
+The kernel exposes a constrained namespace with common data tools:
+- **Polars** (`pl`), **Pandas** (`pd`), **NumPy** (`np`), **Altair** (`alt`)
+- **DuckDB** via `query_db()` and helper functions
+- **display()** / `show_table()` / `show_html()` to emit rich artifacts
 
-Security restrictions prevent:
-- File system access (`open`, `os`, `shutil`)
-- Network access (`socket`, `requests`, `urllib`)
-- Dangerous operations (`exec`, `eval`, `__import__`)
-- Long-running code (30-second timeout)
+Safety checks are lightweight string guards, so this is intended for local, trusted use and educational purposes.
 
-## Development
+## Development Notes
 
-See `docs/documentation.html` for detailed architecture documentation.
+See `docs/design.md` for a deeper walkthrough of the A2A flow, artifact rendering, and sandbox internals.

@@ -1,7 +1,8 @@
 """
-FastAPI Backend for Analytical Chatbot.
+Legacy FastAPI Backend for Analytical Chatbot.
 
-Run with: uvicorn api:app --reload --port 8000
+This module predates the A2A + BFF architecture and remains for reference
+and backwards compatibility during development/testing.
 """
 
 import os
@@ -31,7 +32,7 @@ except ImportError:
     def list_saved_tables():
         return []
 
-from flow import run_chatbot
+from utils.flow import run_chatbot
 from utils.call_llm import get_provider_info
 
 # --- Data Models ---

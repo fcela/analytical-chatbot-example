@@ -244,6 +244,9 @@ header h1 {
   border-radius: 16px 16px 4px 16px;
   max-width: 70%;
   padding: 12px 16px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .msg.assistant .msg-content {
@@ -251,6 +254,9 @@ header h1 {
   border-radius: 16px 16px 16px 4px;
   max-width: 85%;
   padding: 16px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .msg-content p {
@@ -260,6 +266,17 @@ header h1 {
 
 .msg-content p:last-child {
   margin-bottom: 0;
+}
+
+.msg-content ul,
+.msg-content ol {
+  padding-left: 1.25rem;
+  margin-left: 0;
+  list-style-position: outside;
+}
+
+.msg-content li {
+  margin-left: 0;
 }
 
 /* Code Block */

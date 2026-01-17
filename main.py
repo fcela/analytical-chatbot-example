@@ -29,6 +29,7 @@ def run_backend():
     import asyncio
     
     async def main():
+        # Run HTTP and gRPC servers concurrently in the same process.
         tasks = [server.serve()]
         
         print(f"Initializing gRPC server on port {grpc_port}...", flush=True)
@@ -52,7 +53,7 @@ def run_frontend_api():
     # Frontend API port - Stays 8000 for the UI
     port = int(os.getenv("PORT", "8000"))
     
-    # Need to tell REST server where backend is
+    # Tell the BFF how to reach the gRPC backend.
     os.environ["BACKEND_PORT"] = os.getenv("BACKEND_GRPC_PORT", "50051")
     
     uvicorn.run("rest_server:app", host=host, port=port, log_level="info")

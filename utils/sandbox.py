@@ -66,7 +66,8 @@ class SandboxKernel:
                 }
             else:
                 # Timeout
-                self.restart() # Kill the stuck process
+                # Kill the stuck process to avoid zombie workers.
+                self.restart()
                 return {
                     "success": False,
                     "error": f"Execution timed out ({self.timeout_seconds}s). Kernel restarted.",
@@ -98,6 +99,7 @@ class SandboxKernel:
 
 # Compatibility function (creates a transient kernel)
 def execute_sandboxed_code(code: str, context: dict = None, timeout_seconds: int = 30) -> dict:
+    """Run code in a throwaway kernel (used by older flows/tests)."""
     kernel = SandboxKernel(timeout_seconds)
     # If context has files, we need to load them. 
     # But context currently passes DataFrames directly. 
