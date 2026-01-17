@@ -4,7 +4,9 @@ A web-based chatbot built with PocketFlow that can analyze uploaded CSV/JSON fil
 
 ## Architecture
 
-- **Backend**: FastAPI (`api.py`) with PocketFlow for LLM orchestration
+- **Backend**: Starlette/FastAPI application implementing the **Agent-to-Agent (A2A)** protocol (`a2a_server.py`, `agent_executor.py`)
+- **Legacy API**: FastAPI compatibility layer (`legacy_routes.py`) for the frontend
+- **Flow Control**: PocketFlow for LLM orchestration (`flow.py`, `nodes.py`)
 - **Frontend**: React + Vite + TypeScript
 - **LLM Providers**: OpenAI, Anthropic (Claude), or Ollama (local)
 - **Sandbox**: Thread-based Python execution with timeout and security restrictions
@@ -13,8 +15,11 @@ A web-based chatbot built with PocketFlow that can analyze uploaded CSV/JSON fil
 
 ```
 chatbot/
-├── api.py              # FastAPI endpoints
-├── main.py             # Entry point (runs uvicorn)
+├── a2a_server.py       # A2A Server setup (HTTP & gRPC)
+├── agent_executor.py   # A2A Agent Executor implementation
+├── legacy_routes.py    # Legacy REST API for frontend compatibility
+├── api.py              # (Deprecated) Original FastAPI endpoints
+├── main.py             # Entry point (runs A2A server)
 ├── nodes.py            # PocketFlow node definitions
 ├── flow.py             # Flow orchestration
 ├── utils/
@@ -87,6 +92,20 @@ cd frontend && npm run dev
 ### 4. Open the app
 
 Navigate to http://localhost:5173 in your browser.
+
+## Agent-to-Agent (A2A) Protocol
+
+This agent implements the A2A protocol, allowing it to be discovered and used by other agents.
+
+- **Agent Card**: `http://localhost:8000/.well-known/agent-card.json`
+- **HTTP/JSON-RPC Endpoint**: `http://localhost:8000/messages`
+- **gRPC Endpoint**: `localhost:50051` (if enabled)
+
+The agent supports the following skills:
+- `data-analysis`: Analyze uploaded CSV/JSON files
+- `code-generation`: Generate Python code (Polars/Altair)
+- `visualization`: Create charts and plots
+- `database-query`: Query the built-in DuckDB database
 
 ## Environment Variables
 
