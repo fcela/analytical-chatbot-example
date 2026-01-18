@@ -173,6 +173,15 @@ def delete_table(name: str):
     return _delete_table(name)
 
 
+class Markdown:
+    """Mock for IPython.display.Markdown."""
+    def __init__(self, data):
+        self.data = data
+    def __str__(self):
+        return str(self.data)
+    def _repr_markdown_(self):
+        return str(self.data)
+
 class KernelWorker:
     def __init__(self, pipe):
         self.pipe = pipe
@@ -190,6 +199,7 @@ class KernelWorker:
             'abs': abs, 'round': round, 'len': len, 'print': print,
             'list': list, 'dict': dict, 'set': set, 'tuple': tuple, 'str': str, 'int': int, 'float': float, 'bool': bool,
             'range': range, 'enumerate': enumerate, 'zip': zip, 'map': map, 'filter': filter, 'sorted': sorted,
+            'Markdown': Markdown,
         }
         
         if HAS_PANDAS: self.namespace['pd'] = pd; self.namespace['pandas'] = pd
@@ -208,10 +218,27 @@ class KernelWorker:
         self.namespace['show_table'] = self.show_table
         self.namespace['display'] = self.display
         self.namespace['show_html'] = self.show_html
+        self.namespace['print_md'] = self.print_md
         self.namespace['artifacts'] = self.artifacts
 
     def _gen_id(self, prefix):
         return f"{prefix}_{str(uuid.uuid4())[:8]}"
+
+    def print_md(self, obj):
+        """Prints an object as Markdown to stdout."""
+        if (HAS_PANDAS and isinstance(obj, pd.DataFrame)) or \
+           (HAS_POLARS and isinstance(obj, pl.DataFrame)):
+            try:
+                # Use tabulate if available (pandas.to_markdown uses it)
+                if HAS_POLARS and isinstance(obj, pl.DataFrame):
+                    print(obj.to_pandas().to_markdown(index=False))
+                else:
+                    print(obj.to_markdown(index=False))
+            except Exception:
+                # Fallback to string representation if tabulate fails
+                print(str(obj))
+        else:
+            print(str(obj))
 
     def display(self, obj, type=None, label=None):
         """
@@ -221,6 +248,12 @@ class KernelWorker:
         art_id = label if (label and _is_safe_artifact_id(label)) else None
         label_text = label if (label and not _is_safe_artifact_id(label)) else None
         
+        # Handle Markdown objects
+        if isinstance(obj, Markdown):
+            obj = obj.data
+            if type is None:
+                type = "markdown"
+
         # Determine type if not provided so callers can just call display(obj).
         if type is None:
             if HAS_ALTAIR and isinstance(obj, alt.TopLevelMixin):
@@ -232,8 +265,9 @@ class KernelWorker:
                 type = "html"
             else:
                 type = "text"
+        
         # Automatically tag Mermaid strings so the UI renders them.
-        if type == "text" and _looks_like_mermaid(obj):
+        if (type == "text" or type == "markdown") and _looks_like_mermaid(obj):
             type = "mermaid"
 
         content = None
