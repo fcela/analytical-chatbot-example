@@ -7,6 +7,8 @@ import sys
 import io
 import traceback
 import json
+import ast
+import builtins
 from decimal import Decimal
 import base64
 import re
@@ -60,18 +62,64 @@ except ImportError:
     duckdb = None
     HAS_DUCKDB = False
 
-# We need to redefine safety checks here or move them to a common module.
-FORBIDDEN_PATTERNS = [
-    'import os', 'import sys', 'import subprocess', 'import socket', 'import requests',
-    'import urllib', 'import shutil', 'import pickle', '__import__', 'exec(', 'eval(',
-    'open(', 'input(', '__builtins__', '__globals__', 'sys.modules'
-]
+# AST-based security validation
+FORBIDDEN_MODULES = {'os', 'sys', 'subprocess', 'socket', 'requests', 'urllib',
+                     'shutil', 'pickle', 'importlib', 'ctypes', 'multiprocessing'}
+
+FORBIDDEN_NAMES = {'exec', 'eval', 'compile', 'open', 'input', '__import__',
+                   'getattr', 'setattr', 'delattr', 'globals', 'locals', 'vars'}
+
+DANGEROUS_ATTRS = {'__class__', '__bases__', '__subclasses__', '__mro__',
+                   '__globals__', '__code__', '__builtins__', '__dict__',
+                   'gi_frame', 'f_locals', 'f_globals', 'f_builtins'}
+
+# Allowlist of safe builtins for the sandbox namespace
+# Note: __import__ is needed for import statements to work; AST checker blocks dangerous modules
+SAFE_BUILTINS = {
+    'abs', 'all', 'any', 'bin', 'bool', 'bytes', 'callable', 'chr', 'dict',
+    'divmod', 'enumerate', 'filter', 'float', 'format', 'frozenset', 'hash',
+    'hex', 'int', 'isinstance', 'issubclass', 'iter', 'len', 'list', 'map',
+    'max', 'min', 'next', 'oct', 'ord', 'pow', 'print', 'range', 'repr',
+    'reversed', 'round', 'set', 'slice', 'sorted', 'str', 'sum', 'tuple',
+    'type', 'zip', 'Exception', 'ValueError', 'TypeError', 'KeyError',
+    'IndexError', 'AttributeError', 'RuntimeError', 'StopIteration',
+    '__import__',
+}
+
+def _get_safe_builtins() -> dict:
+    """Return a restricted builtins dict."""
+    return {k: getattr(builtins, k) for k in SAFE_BUILTINS if hasattr(builtins, k)}
 
 def check_safety(code: str) -> tuple[bool, str]:
-    """Lightweight guardrail to block obviously dangerous operations."""
-    for pattern in FORBIDDEN_PATTERNS:
-        if pattern in code: 
-            return False, f"Forbidden pattern: {pattern}"
+    """AST-based security validation to block dangerous operations."""
+    try:
+        tree = ast.parse(code)
+    except SyntaxError as e:
+        return False, f"Syntax error: {e}"
+
+    for node in ast.walk(tree):
+        # Block forbidden imports
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                module = alias.name.split('.')[0]
+                if module in FORBIDDEN_MODULES:
+                    return False, f"Forbidden import: {alias.name}"
+
+        if isinstance(node, ast.ImportFrom):
+            if node.module:
+                module = node.module.split('.')[0]
+                if module in FORBIDDEN_MODULES:
+                    return False, f"Forbidden import: from {node.module}"
+
+        # Block forbidden function calls
+        if isinstance(node, ast.Call):
+            if isinstance(node.func, ast.Name) and node.func.id in FORBIDDEN_NAMES:
+                return False, f"Forbidden call: {node.func.id}"
+
+        # Block dangerous attribute access
+        if isinstance(node, ast.Attribute) and node.attr in DANGEROUS_ATTRS:
+            return False, f"Forbidden attribute access: {node.attr}"
+
     return True, ""
 
 # DuckDB helper functions for the kernel
@@ -191,14 +239,12 @@ class KernelWorker:
         self._init_namespace()
 
     def _init_namespace(self):
-        """Initialize the execution namespace."""
+        """Initialize the execution namespace with restricted builtins."""
         self.namespace = {
+            '__builtins__': _get_safe_builtins(),
             'math': math,
             'statistics': statistics,
             'json': json,
-            'abs': abs, 'round': round, 'len': len, 'print': print,
-            'list': list, 'dict': dict, 'set': set, 'tuple': tuple, 'str': str, 'int': int, 'float': float, 'bool': bool,
-            'range': range, 'enumerate': enumerate, 'zip': zip, 'map': map, 'filter': filter, 'sorted': sorted,
             'Markdown': Markdown,
         }
         
@@ -225,20 +271,27 @@ class KernelWorker:
         return f"{prefix}_{str(uuid.uuid4())[:8]}"
 
     def print_md(self, obj):
-        """Prints an object as Markdown to stdout."""
+        """Renders an object as a Markdown artifact and prints data for LLM context."""
         if (HAS_PANDAS and isinstance(obj, pd.DataFrame)) or \
            (HAS_POLARS and isinstance(obj, pl.DataFrame)):
             try:
-                # Use tabulate if available (pandas.to_markdown uses it)
+                # Convert to markdown table
                 if HAS_POLARS and isinstance(obj, pl.DataFrame):
-                    print(obj.to_pandas().to_markdown(index=False))
+                    md_content = obj.to_pandas().to_markdown(index=False)
                 else:
-                    print(obj.to_markdown(index=False))
+                    md_content = obj.to_markdown(index=False)
+                # Print to stdout so the analysis LLM sees the actual data
+                print(md_content)
+                # Also create artifact for frontend rendering
+                self.display(md_content, type='markdown')
             except Exception:
-                # Fallback to string representation if tabulate fails
-                print(str(obj))
+                content = str(obj)
+                print(content)
+                self.display(content, type='markdown')
         else:
-            print(str(obj))
+            content = str(obj)
+            print(content)
+            self.display(content, type='markdown')
 
     def display(self, obj, type=None, label=None):
         """
@@ -439,6 +492,18 @@ class KernelWorker:
         except Exception as e:
             self.pipe.send({'status': 'error', 'error': str(e)})
 
+def _apply_resource_limits():
+    """Apply resource limits to the worker process (Unix only)."""
+    try:
+        import resource
+        # 60s CPU time limit
+        resource.setrlimit(resource.RLIMIT_CPU, (60, 60))
+        # Note: RLIMIT_AS (address space) is too restrictive for Python + scientific libs
+        # The process isolation and timeout provide sufficient protection
+    except (ImportError, ValueError, OSError):
+        pass  # Skip on Windows or if limits not supported
+
 def run_worker(pipe):
+    _apply_resource_limits()
     worker = KernelWorker(pipe)
     worker.run()
