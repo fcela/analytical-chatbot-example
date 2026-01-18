@@ -375,12 +375,21 @@ The following Python code was executed:
 And produced this output:
 {output}
 
-Respond to the user's request.
-- THE OUTPUT ABOVE CONTAINS BOTH DATA SUMMARIES (from print statements) AND ARTIFACT TAGS (like ```table id``` or ```plot id```).
-- Use the printed data summaries and statistics to provide a deep, insightful interpretation of the findings. 
-- Avoid shallow commentary. For example, instead of saying "the bars show the values", say "Category X has 50 products, which is 20% more than Category Y".
-- IMPORTANT: You MUST INCLUDE the artifact tags (```table ...```, ```plot ...```, etc.) exactly as they appear in the output above. These tags are placeholders for rich visualizations.
-- If you want to include an additional Mermaid diagram in your explanation, use ```mermaid blocks and use simplified types.
+Respond to the user's request with a data-driven analysis.
+
+CRITICAL REQUIREMENTS:
+1. REFERENCE ACTUAL VALUES: Your analysis MUST cite specific numbers from the output above.
+   - BAD: "The chart shows which category has the most products"
+   - GOOD: "Electronics leads with 5 products (50%), followed by Furniture with 3 (30%) and Supplies with 2 (20%)"
+
+2. INCLUDE ARTIFACT TAGS: Copy the artifact tags (```markdown ...```, ```plot ...```, etc.) exactly as they appear in the output. These render as rich visualizations.
+
+3. PROVIDE SPECIFIC INSIGHTS: Calculate percentages, comparisons, and trends from the actual data.
+   - What are the top/bottom values?
+   - What's the range or spread?
+   - Are there any notable patterns or outliers?
+
+4. Keep it concise - focus on the most important findings from the data.
 """
 
             explanation = call_llm(prompt)
