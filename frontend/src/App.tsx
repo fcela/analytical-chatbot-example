@@ -31,20 +31,30 @@ function MermaidChart({ chart }: { chart: string }) {
 
   useEffect(() => {
     // Strip code fences so mermaid.render receives only diagram syntax.
-    const cleaned = chart
-      .replace(/^\s*```mermaid\s*/i, '')
-      .replace(/\s*```$/, '')
-      .trim()
+    // Also handle cases where there might be artifact tags like "mermaid mermaid_123" inside.
+    let cleaned = chart.trim();
+    
+    // Remove leading/trailing code fences
+    cleaned = cleaned.replace(/^```mermaid\s*/i, '').replace(/\s*```$/, '').trim();
+    
+    // If it still looks like an artifact tag "mermaid id", we just want the content,
+    // but usually MermaidChart is called with the content already.
+    
     setSvg('')
+    if (!cleaned) return;
+
     mermaid.render(id, cleaned).then(({ svg }) => {
       setSvg(svg)
     }).catch((error) => {
       console.error("Mermaid error:", error)
-      setSvg(`<div style="color: #ff6b6b; padding: 10px; border: 1px solid #ff6b6b; border-radius: 4px;">Failed to render diagram</div>`)
+      setSvg(`<div style="color: #ff6b6b; padding: 10px; border: 1px solid #ff6b6b; border-radius: 4px; font-size: 12px;">
+        <strong>Mermaid Error:</strong><br/>
+        <pre style="white-space: pre-wrap; font-size: 10px;">${cleaned}</pre>
+      </div>`)
     })
   }, [chart, id])
 
-  return <div className="mermaid-container" style={{ background: 'rgba(0,0,0,0.2)', padding: '10px', borderRadius: '8px', margin: '10px 0', textAlign: 'center' }} dangerouslySetInnerHTML={{ __html: svg }} />
+  return <div className="mermaid-container" style={{ background: 'rgba(0,0,0,0.2)', padding: '10px', borderRadius: '8px', margin: '10px 0', textAlign: 'center', overflowX: 'auto' }} dangerouslySetInnerHTML={{ __html: svg }} />
 }
 
 function OutputBlock({ output }: { output: string }) {
@@ -280,18 +290,20 @@ export default function App() {
                   const matchTag = /^(table|plot|html|svg|mermaid|markdown)\s+([a-zA-Z0-9_]+)$/.exec(content.trim())
                   
                   if (matchTag) {
-                    const type = matchTag[1]
+                    const typeFromTag = matchTag[1]
                     const id = matchTag[2]
                     const artifact = artifacts[id]
                     
                     if (artifact) {
-                      if (type === 'table' && artifact.type === 'table') {
+                      const type = artifact.type // Trust the actual artifact type
+                      
+                      if (type === 'table') {
                         return <div className="table-container" dangerouslySetInnerHTML={{ __html: artifact.content }} />
                       }
-                      if ((type === 'plot' || type === 'svg') && (artifact.type === 'plot' || artifact.type === 'svg')) {
+                      if (type === 'plot' || type === 'svg' || (type === 'plot' && typeFromTag === 'svg')) {
                         return <img src={`data:image/svg+xml;base64,${artifact.content}`} alt="Plot" className="plot-image" />
                       }
-                      if (type === 'html' && artifact.type === 'html') {
+                      if (type === 'html') {
                          return (
                             <div className="dashboard-container">
                               <div className="dashboard-header">Interactive Output</div>
@@ -310,10 +322,10 @@ export default function App() {
                             </div>
                          )
                       }
-                      if (type === 'mermaid' && artifact.type === 'mermaid') {
+                      if (type === 'mermaid') {
                         return <MermaidChart chart={artifact.content} />
                       }
-                      if (type === 'markdown' && artifact.type === 'markdown') {
+                      if (type === 'markdown') {
                          return <ReactMarkdown remarkPlugins={[remarkGfm]}>{artifact.content}</ReactMarkdown>
                       }
                     }

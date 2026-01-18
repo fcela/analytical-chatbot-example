@@ -158,6 +158,11 @@ class ConversationResponseNode(Node):
 - Analyze data when users upload CSV/JSON files
 - Generate Python code for calculations and visualizations
 - Create charts and plots using Altair{db_info}
+- Generate Mermaid diagrams (ERDs, flowcharts) directly in your response using ```mermaid blocks.
+
+MERMAID DIAGRAMS:
+- Use ```mermaid code blocks to show diagrams.
+- IMPORTANT: Mermaid ER diagrams (erDiagram) MUST use simplified types: use 'int', 'varchar', 'decimal', 'datetime', 'boolean'. Do NOT use parentheses in types like 'VARCHAR(255)' or 'DECIMAL(10,2)'.
 
 Currently uploaded files: {files_list}
 
@@ -225,14 +230,21 @@ class GenerateCodeNode(Node):
 
         system_prompt = """You are a Python code generator for data analysis. Generate clean,
 executable Python code that:
-- PREFER Polars (as pl) over Pandas for data manipulation
-- Use Altair (as alt) for ALL visualizations
-- Use query_db(sql) to query the DuckDB database
+- PREFER Polars (as pl) over Pandas for data manipulation.
+- Use Altair (as alt) for ALL visualizations.
+- Use query_db(sql) to query the DuckDB database.
+- DATA ANALYSIS IS CRITICAL: Always print() concise data summaries or key statistics to stdout. 
+- Use print_md(df) to print DataFrames as Markdown tables to stdout.
+- The information printed to stdout is used by the assistant to interpret the data for the user.
 - Use display(obj, label=None) to show DataFrames, Plots (Altair charts), HTML, or Mermaid diagrams.
 - You can also use show_table(df) and show_html(html) as shorthands.
 - If a plotted column is Decimal, cast it to Float64 before charting to avoid Altair type issues.
 - NEVER redefine or shadow query_db, save_table, load_table, list_saved_tables, or delete_table.
 - NEVER create your own DuckDB connection (no duckdb.connect); always use query_db().
+
+MERMAID DIAGRAMS:
+- To show a Mermaid diagram (like an ERD), define the mermaid string and call display(mermaid_string).
+- IMPORTANT: Mermaid ER diagrams (erDiagram) MUST use simplified types: use 'int' instead of 'INTEGER', 'varchar' instead of 'VARCHAR(255)', 'decimal' instead of 'DECIMAL(10,2)'. Do NOT use parentheses in types.
 
 RICH REPORTING:
 - You can create complex reports by calling display() multiple times.
@@ -319,6 +331,7 @@ class FormatResultsNode(Node):
                 mermaid_start = None
                 mermaid_end = None
                 mermaid_prefixes = (
+                    "```mermaid",
                     "graph",
                     "flowchart",
                     "sequenceDiagram",
@@ -359,21 +372,26 @@ The following Python code was executed:
 {code}
 ```
 
-And produced this output (which may contain artifact tags like ```table id``` or ```plot id```):
+And produced this output:
 {output}
 
 Respond to the user's request.
-- Integrate the analysis findings into your response.
-- IMPORTANT: The output contains tags like ```table ...``` and ```plot ...```. You MUST INCLUDE these tags in your final response where the table or plot should appear. Do not change them.
+- THE OUTPUT ABOVE CONTAINS BOTH DATA SUMMARIES (from print statements) AND ARTIFACT TAGS (like ```table id``` or ```plot id```).
+- Use the printed data summaries and statistics to provide a deep, insightful interpretation of the findings. 
+- Avoid shallow commentary. For example, instead of saying "the bars show the values", say "Category X has 50 products, which is 20% more than Category Y".
+- IMPORTANT: You MUST INCLUDE the artifact tags (```table ...```, ```plot ...```, etc.) exactly as they appear in the output above. These tags are placeholders for rich visualizations.
+- If you want to include an additional Mermaid diagram in your explanation, use ```mermaid blocks and use simplified types.
 """
 
             explanation = call_llm(prompt)
             # Ensure the response references Mermaid artifacts so the UI renders them.
             if artifacts and any(art.get("type") == "mermaid" for art in artifacts.values()):
-                if "mermaid " not in explanation:
+                # Check for both the tag and the direct mermaid block
+                has_mermaid_ref = "mermaid " in explanation or "```mermaid" in explanation
+                if not has_mermaid_ref:
                     mermaid_keys = [k for k, v in artifacts.items() if v.get("type") == "mermaid"]
                     if mermaid_keys:
-                        explanation = f"{explanation}\n\n```\nmermaid {mermaid_keys[0]}\n```"
+                        explanation = f"{explanation}\n\n```mermaid {mermaid_keys[0]}```"
 
             return {
                 "message": explanation,
