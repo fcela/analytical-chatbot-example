@@ -1,10 +1,13 @@
-"Node definitions for the analytical chatbot."
+"""Node definitions for the analytical chatbot."""
 
+import logging
 import re
 import uuid
 import yaml
 from pocketflow import Node
 from utils import call_llm, parse_code_block
+
+logger = logging.getLogger(__name__)
 
 # Try to import database utilities
 try:
@@ -233,7 +236,7 @@ executable Python code that:
 - PREFER Polars (as pl) over Pandas for data manipulation.
 - Use Altair (as alt) for ALL visualizations.
 - Use query_db(sql) to query the DuckDB database.
-- DATA ANALYSIS IS CRITICAL: Always print() concise data summaries or key statistics to stdout. 
+- DATA ANALYSIS IS CRITICAL: Always print() concise data summaries or key statistics to stdout.
 - Use print_md(df) to print DataFrames as Markdown tables to stdout.
 - The information printed to stdout is used by the assistant to interpret the data for the user.
 - Use display(obj, label=None) to show DataFrames, Plots (Altair charts), HTML, or Mermaid diagrams.
@@ -241,6 +244,13 @@ executable Python code that:
 - If a plotted column is Decimal, cast it to Float64 before charting to avoid Altair type issues.
 - NEVER redefine or shadow query_db, save_table, load_table, list_saved_tables, or delete_table.
 - NEVER create your own DuckDB connection (no duckdb.connect); always use query_db().
+
+POLARS API (CRITICAL - these are common mistakes):
+- Use df.with_columns() NOT df.with_column() (with_column was removed in Polars 0.19+)
+- Use df.group_by() NOT df.groupby()
+- Use df.rename({"old": "new"}) NOT df.rename(columns={"old": "new"})
+- Use pl.col("x").alias("y") for renaming columns in expressions
+- Use df.select() or df.with_columns() for column operations
 
 MERMAID DIAGRAMS:
 - To show a Mermaid diagram (like an ERD), define the mermaid string and call display(mermaid_string).
@@ -252,7 +262,22 @@ RICH REPORTING:
 - You can mix print statements (for text) with display() calls (for rich artifacts)."""
 
         # Feed the last execution error back to the LLM to guide a corrected retry.
-        error_note = f"\nPrevious execution error:\n{prep_res['last_error']}\nFix the code to avoid this error." if prep_res.get("last_error") else ""
+        last_error = prep_res.get("last_error")
+        if last_error:
+            logger.info(f"[GENERATE] Retrying code generation with error feedback: {last_error[:200]}...")
+            error_note = f"""
+
+PREVIOUS EXECUTION ERROR (YOU MUST FIX THIS):
+{last_error}
+
+IMPORTANT: Carefully read the error above and fix your code. Common fixes:
+- AttributeError with 'with_column': Use with_columns() instead (plural)
+- AttributeError with 'groupby': Use group_by() instead (with underscore)
+- TypeError with column types: Cast Decimal to Float64 before operations
+"""
+        else:
+            logger.info("[GENERATE] Generating code (first attempt)")
+            error_note = ""
         prompt = f"""Generate Python code to answer this request: {prep_res["message"]}{error_note}
 
 Available DataFrames (pre-loaded): {var_list_str if var_list_str else 'None'}
@@ -275,6 +300,12 @@ Generate only the Python code, wrapped in ```python``` blocks."""
 
     def post(self, shared, prep_res, exec_res):
         shared["generated_code"] = exec_res
+        retry_count = shared.get("code_retry_count", 0)
+        if retry_count > 0:
+            logger.info(f"[GENERATE] Code regenerated (retry #{retry_count})")
+        else:
+            logger.info("[GENERATE] Code generated successfully")
+        logger.debug(f"[GENERATE] Generated code:\n{exec_res[:500]}...")
         return "default"
 
 
@@ -299,12 +330,20 @@ class ExecuteCodeNode(Node):
     def post(self, shared, prep_res, exec_res):
         shared["execution_result"] = exec_res
         if not exec_res.get("success"):
-            shared["last_error"] = exec_res.get("error", "Unknown error")
+            error_msg = exec_res.get("error", "Unknown error")
+            shared["last_error"] = error_msg
             retry_count = shared.get("code_retry_count", 0)
+            logger.info(f"[EXECUTE] Code execution FAILED (attempt {retry_count + 1}/3)")
+            logger.info(f"[EXECUTE] Error: {error_msg[:500]}...")
             if retry_count < 2:
                 shared["code_retry_count"] = retry_count + 1
+                logger.info(f"[EXECUTE] Routing back to GenerateCodeNode for retry #{retry_count + 1}")
                 # Route back to GenerateCodeNode for a correction pass.
                 return "retry"
+            else:
+                logger.warning(f"[EXECUTE] Max retries (2) exhausted, proceeding to format error response")
+        else:
+            logger.info("[EXECUTE] Code execution succeeded")
         return "default"
 
 

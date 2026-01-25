@@ -28,5 +28,9 @@ duckdb
 # YAML parsing for structured outputs
 pyyaml
 
-# Optional: For enhanced code sandboxing
+# Optional: For Docker-based code sandboxing (requires Docker)
+# Install with: pip install 'llm-sandbox[docker]'
+llm-sandbox[docker]
+
+# RestrictedPython (alternative sandboxing, not currently used)
 # RestrictedPython

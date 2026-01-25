@@ -7,8 +7,16 @@ import multiprocessing
 import time
 from typing import Any, Dict, Optional
 from utils.kernel import run_worker
+from utils.sandbox_interface import SandboxInterface
 
-class SandboxKernel:
+
+class SandboxKernel(SandboxInterface):
+    """Multiprocessing-based sandbox implementation."""
+
+    @property
+    def backend_name(self) -> str:
+        return "multiprocessing"
+
     def __init__(self, timeout_seconds: int = 30):
         self.timeout_seconds = timeout_seconds
         self.process: Optional[multiprocessing.Process] = None

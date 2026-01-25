@@ -5,6 +5,7 @@ AgentExecutor that can handle A2A protocol requests.
 """
 
 import asyncio
+import logging
 import uuid
 import base64
 import io
@@ -27,7 +28,9 @@ from a2a.types import (
 from a2a.utils.message import new_agent_text_message
 
 from utils.flow import run_chatbot
-from utils.sandbox import SandboxKernel
+from utils.sandbox_factory import create_sandbox
+
+logger = logging.getLogger(__name__)
 
 class AnalyticalChatbotExecutor(AgentExecutor):
     """A2A Agent Executor that wraps the analytical chatbot flow."""
@@ -42,11 +45,17 @@ class AnalyticalChatbotExecutor(AgentExecutor):
             context_id = "default"
 
         if context_id not in self._sessions:
+            logger.info(f"[SESSION] Creating new session for context_id='{context_id}'")
+            kernel = create_sandbox()
+            logger.info(f"[SESSION] Session created with backend: {kernel.backend_name}")
+            print(f"[Sandbox] Created new session with backend: {kernel.backend_name}")
             self._sessions[context_id] = {
-                "files": {}, # Metadata only (actual data lives inside the kernel).
+                "files": {},  # Metadata only (actual data lives inside the kernel).
                 "history": [],
-                "kernel": SandboxKernel() # Persistent kernel per conversation.
+                "kernel": kernel
             }
+        else:
+            logger.debug(f"[SESSION] Reusing existing session for context_id='{context_id}'")
 
         return self._sessions[context_id]
 

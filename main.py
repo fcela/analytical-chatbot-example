@@ -1,10 +1,23 @@
 """
 Launcher script to start both the A2A Backend and the REST API (BFF).
 """
+import logging
 import multiprocessing
 import os
 import time
 import sys
+
+# Suppress noisy gRPC fork warnings before importing grpc
+# These occur because we use multiprocessing with gRPC
+os.environ.setdefault("GRPC_VERBOSITY", "ERROR")
+os.environ.setdefault("GRPC_ENABLE_FORK_SUPPORT", "0")
+
+# Configure logging early to see sandbox initialization
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
 
 def run_backend():
     print("Starting A2A Backend (gRPC + HTTP)...")
@@ -59,6 +72,25 @@ def run_frontend_api():
     uvicorn.run("rest_server:app", host=host, port=port, log_level="info")
 
 if __name__ == "__main__":
+    # Log sandbox configuration at startup
+    print("=" * 60)
+    print("ANALYTICAL CHATBOT - SANDBOX CONFIGURATION")
+    print("=" * 60)
+    print(f"  SANDBOX_FORCE_BACKEND:  {os.environ.get('SANDBOX_FORCE_BACKEND', '(not set - auto-detect)')}")
+    print(f"  SANDBOX_PREFER_DOCKER:  {os.environ.get('SANDBOX_PREFER_DOCKER', '(not set - default: true)')}")
+    print(f"  SANDBOX_TIMEOUT:        {os.environ.get('SANDBOX_TIMEOUT', '(not set - default: 30s)')}")
+    print(f"  SANDBOX_DOCKER_IMAGE:   {os.environ.get('SANDBOX_DOCKER_IMAGE', '(not set - default image)')}")
+    print(f"  SANDBOX_SKIP_INSTALL:   {os.environ.get('SANDBOX_SKIP_INSTALL', '(not set - auto-detect from image name)')}")
+    print("=" * 60)
+    print()
+
+    # Hint about pre-built image
+    if os.environ.get('SANDBOX_FORCE_BACKEND') == 'docker' and not os.environ.get('SANDBOX_DOCKER_IMAGE'):
+        print("TIP: For faster startup, build and use the pre-built sandbox image:")
+        print("  ./docker/build-sandbox-image.sh")
+        print("  export SANDBOX_DOCKER_IMAGE=analytical-chatbot-sandbox:latest")
+        print()
+
     # Create processes
     backend_process = multiprocessing.Process(target=run_backend)
     frontend_process = multiprocessing.Process(target=run_frontend_api)
