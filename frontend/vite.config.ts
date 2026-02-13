@@ -6,11 +6,26 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      '/api': {
+      '/a2a': {
         target: 'http://localhost:8000',
         changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/api/, '')
-      }
+      },
+      '/upload': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+      },
+      '/files': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+      },
+      '/database': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+      },
+      '/clear': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+      },
     }
   }
 })

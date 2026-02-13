@@ -1,123 +1,17 @@
-import React, { useEffect, useState, useRef } from 'react'
-import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
-import mermaid from 'mermaid'
-
-function normalizeApiBase(value: string) {
-  if (value.startsWith('http://') || value.startsWith('https://') || value.startsWith('/')) {
-    return value
-  }
-  return `http://${value}`
-}
+import React, { useState, useRef, useEffect, useCallback } from 'react'
+import { A2UIProvider, A2UIRenderer } from '@a2ui-sdk/react/0.8'
+import type { A2UIMessage, A2UIAction } from '@a2ui-sdk/react/0.8'
+import { customCatalog } from './catalog'
 
 const API_BASE = (() => {
-  const envBase = import.meta.env.VITE_API_BASE?.trim()
-  if (envBase) return normalizeApiBase(envBase)
-  if (import.meta.env.DEV) return '/api'
-  if (window.location.protocol === 'file:') return 'http://localhost:8000'
+  if (import.meta.env.DEV) return ''  // Vite proxy handles routing
   return window.location.origin
 })()
 
-// Initialize mermaid
-mermaid.initialize({
-  startOnLoad: false,
-  theme: 'dark',
-  securityLevel: 'loose',
-})
-
-function MermaidChart({ chart }: { chart: string }) {
-  const [svg, setSvg] = useState('')
-  const id = useRef(`mermaid-${Math.random().toString(36).substr(2, 9)}`).current
-
-  useEffect(() => {
-    // Strip code fences so mermaid.render receives only diagram syntax.
-    // Also handle cases where there might be artifact tags like "mermaid mermaid_123" inside.
-    let cleaned = chart.trim();
-    
-    // Remove leading/trailing code fences
-    cleaned = cleaned.replace(/^```mermaid\s*/i, '').replace(/\s*```$/, '').trim();
-    
-    // If it still looks like an artifact tag "mermaid id", we just want the content,
-    // but usually MermaidChart is called with the content already.
-    
-    setSvg('')
-    if (!cleaned) return;
-
-    mermaid.render(id, cleaned).then(({ svg }) => {
-      setSvg(svg)
-    }).catch((error) => {
-      console.error("Mermaid error:", error)
-      setSvg(`<div style="color: #ff6b6b; padding: 10px; border: 1px solid #ff6b6b; border-radius: 4px; font-size: 12px;">
-        <strong>Mermaid Error:</strong><br/>
-        <pre style="white-space: pre-wrap; font-size: 10px;">${cleaned}</pre>
-      </div>`)
-    })
-  }, [chart, id])
-
-  return <div className="mermaid-container" style={{ background: 'rgba(0,0,0,0.2)', padding: '10px', borderRadius: '8px', margin: '10px 0', textAlign: 'center', overflowX: 'auto' }} dangerouslySetInnerHTML={{ __html: svg }} />
-}
-
-function OutputBlock({ output }: { output: string }) {
-  const [expanded, setExpanded] = useState(false)
-  const lineCount = output.split('\n').length
-
-  return (
-    <div className={`output-block ${expanded ? 'expanded' : 'collapsed'}`}>
-      <div 
-        className="output-header" 
-        onClick={() => setExpanded(!expanded)}
-        style={{ cursor: 'pointer', userSelect: 'none', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
-      >
-        <span>{expanded ? '▼' : '▶'} Output ({lineCount} lines)</span>
-      </div>
-      {expanded && (
-        <pre>{output}</pre>
-      )}
-    </div>
-  )
-}
-
-function CodeBlock({ code }: { code: string }) {
-  const [expanded, setExpanded] = useState(false)
-  const lineCount = code.split('\n').length
-
-  return (
-    <div className={`code-block ${expanded ? 'expanded' : 'collapsed'}`}>
-      <div className="code-header" onClick={() => setExpanded(!expanded)}>
-        <span className="code-toggle">
-          {expanded ? '▼' : '▶'} Python ({lineCount} lines)
-        </span>
-        <button onClick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(code) }}>
-          Copy
-        </button>
-      </div>
-      {expanded && (
-        <pre><code>{code}</code></pre>
-      )}
-    </div>
-  )
-}
-
-interface Artifact {
-  type: string
-  content: string
-}
-
-interface ChatResponse {
-  message: string
-  code?: string | null
-  output?: string | null
-  artifacts?: Record<string, Artifact> | null
-  plots?: string[] | null
-  tables?: string[] | null
-  html?: string[] | null
-  error?: string | null
-}
-
-interface Message {
-  role: 'user' | 'assistant'
-  content: string
-  response?: ChatResponse
+interface FileInfo {
+  filename: string
+  rows: number
+  columns: number
 }
 
 interface TableInfo {
@@ -128,39 +22,29 @@ interface TableInfo {
 interface DatabaseInfo {
   available: boolean
   tables: Record<string, TableInfo>
-  saved_tables: Record<string, TableInfo>
 }
 
-export default function App() {
-  const [files, setFiles] = useState<any[]>([])
+function ChatApp() {
+  const [files, setFiles] = useState<FileInfo[]>([])
   const [database, setDatabase] = useState<DatabaseInfo | null>(null)
-  const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
+  const [contextId, setContextId] = useState<string>('')
+  const [chatHistory, setChatHistory] = useState<Array<{ role: string; content: string }>>([])
+  const [a2uiMessages, setA2uiMessages] = useState<A2UIMessage[]>([])
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    fetchFiles()
     fetchDatabase()
   }, [])
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages])
-
-  async function fetchFiles() {
-    try {
-      const res = await fetch(`${API_BASE}/files`, { credentials: 'include' })
-      const data = await res.json()
-      setFiles(data.files || [])
-    } catch (e) {
-      console.error('Failed to fetch files:', e)
-    }
-  }
+  }, [chatHistory, a2uiMessages])
 
   async function fetchDatabase() {
     try {
-      const res = await fetch(`${API_BASE}/database`, { credentials: 'include' })
+      const res = await fetch(`${API_BASE}/database`)
       const data = await res.json()
       setDatabase(data)
     } catch (e) {
@@ -178,192 +62,115 @@ export default function App() {
       const res = await fetch(`${API_BASE}/upload`, {
         method: 'POST',
         body: form,
-        credentials: 'include'
+        headers: contextId ? { 'X-Context-Id': contextId } : {},
       })
       if (res.ok) {
-        await fetchFiles()
+        const data = await res.json()
+        setFiles(f => [...f, { filename: data.filename, rows: data.rows, columns: data.columns }])
+        if (data.contextId) setContextId(data.contextId)
       } else {
         const err = await res.json()
         alert('Upload error: ' + (err.detail || res.statusText))
       }
-    } catch (e) {
-      alert('Upload failed: ' + e)
+    } catch (err) {
+      alert('Upload failed: ' + err)
     }
     e.target.value = ''
   }
 
-  async function removeFile(filename: string) {
-    await fetch(`${API_BASE}/upload/${encodeURIComponent(filename)}`, {
-      method: 'DELETE',
-      credentials: 'include'
-    })
-    await fetchFiles()
-  }
-
-  async function sendMessage() {
+  const sendMessage = useCallback(async () => {
     if (!input.trim() || loading) return
 
-    const userMsg: Message = { role: 'user', content: input }
-    setMessages(m => [...m, userMsg])
+    const userText = input
+    setChatHistory(h => [...h, { role: 'user', content: userText }])
     setInput('')
     setLoading(true)
 
     try {
-      const res = await fetch(`${API_BASE}/chat`, {
+      const response = await fetch(`${API_BASE}/a2a/message/stream`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: userMsg.content }),
-        credentials: 'include'
+        body: JSON.stringify({
+          message: {
+            messageId: crypto.randomUUID(),
+            role: 'user',
+            parts: [{ text: userText }],
+            contextId: contextId || undefined,
+          },
+        }),
       })
 
-      const data = await res.json()
-
-      if (!res.ok) {
-        setMessages(m => [...m, {
-          role: 'assistant',
-          content: 'Error: ' + (data.detail || 'Request failed'),
-          response: { message: data.detail || 'Request failed', error: data.detail }
-        }])
-        return
+      // Read context ID from response header
+      const respContextId = response.headers.get('X-Context-Id')
+      if (respContextId && !contextId) {
+        setContextId(respContextId)
       }
 
-      const response = data.response as ChatResponse
-      setMessages(m => [...m, {
-        role: 'assistant',
-        content: response.message,
-        response
-      }])
+      // Process SSE stream
+      const reader = response.body?.getReader()
+      const decoder = new TextDecoder()
 
+      if (reader) {
+        let buffer = ''
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+
+          buffer += decoder.decode(value, { stream: true })
+          const lines = buffer.split('\n')
+          buffer = lines.pop() || ''
+
+          for (const line of lines) {
+            if (line.startsWith('data: ')) {
+              try {
+                const eventData = JSON.parse(line.slice(6))
+
+                // Check for A2UI DataParts
+                if (eventData.parts) {
+                  for (const part of eventData.parts) {
+                    const data = part?.root?.data
+                    const mimeType = part?.root?.metadata?.mimeType
+                    if (data && mimeType === 'application/json+a2ui') {
+                      setA2uiMessages(prev => [...prev, data as A2UIMessage])
+                    }
+                  }
+                }
+
+                // Check for completion
+                if (eventData.status?.state === 'completed') {
+                  if (eventData.contextId) setContextId(eventData.contextId)
+                }
+              } catch {
+                // Skip malformed lines
+              }
+            }
+          }
+        }
+      }
+
+      setChatHistory(h => [...h, { role: 'assistant', content: '(rendered via A2UI)' }])
       fetchDatabase()
     } catch (e) {
-      setMessages(m => [...m, {
-        role: 'assistant',
-        content: 'Network error: ' + e,
-        response: { message: 'Network error', error: String(e) }
-      }])
+      console.error('Message send error:', e)
+      setChatHistory(h => [...h, { role: 'assistant', content: `Error: ${e}` }])
     } finally {
       setLoading(false)
     }
-  }
+  }, [input, loading, contextId])
 
   async function clearSession() {
-    await fetch(`${API_BASE}/clear`, { method: 'POST', credentials: 'include' })
+    await fetch(`${API_BASE}/clear`, {
+      method: 'POST',
+      headers: contextId ? { 'X-Context-Id': contextId } : {},
+    })
     setFiles([])
-    setMessages([])
+    setChatHistory([])
+    setA2uiMessages([])
+    setContextId('')
   }
 
-  function renderMessage(msg: Message, index: number) {
-    if (msg.role === 'user') {
-      return (
-        <div className="msg user" key={index}>
-          <div className="msg-content">{msg.content}</div>
-        </div>
-      )
-    }
-
-    const resp = msg.response
-    const artifacts = resp?.artifacts || {}
-
-    return (
-      <div className="msg assistant" key={index}>
-        <div className="msg-content">
-          {msg.content && (
-            <ReactMarkdown
-              remarkPlugins={[remarkGfm]}
-              components={{
-                code(props) {
-                  const {children, className, node, ...rest} = props
-                  const content = String(children).replace(/\n$/, '')
-                  
-                  // Check for Mermaid
-                  const matchMermaid = /language-mermaid|mermaid/.exec(className || '')
-                  if (matchMermaid) {
-                    return <MermaidChart chart={content} />
-                  }
-                  
-                  // Check for Artifact Tags (e.g., table table_123, plot plot_456)
-                  // The backend sends them as ```type id```
-                  // Markdown parser might see them as code blocks if they were wrapped in backticks
-                  // Or if the language class is set to the type
-                  
-                  // Helper: check if we have a match in artifacts
-                  const matchTag = /^(table|plot|html|svg|mermaid|markdown)\s+([a-zA-Z0-9_]+)$/.exec(content.trim())
-                  
-                  if (matchTag) {
-                    const typeFromTag = matchTag[1]
-                    const id = matchTag[2]
-                    const artifact = artifacts[id]
-                    
-                    if (artifact) {
-                      const type = artifact.type // Trust the actual artifact type
-                      
-                      if (type === 'table') {
-                        return <div className="table-container" dangerouslySetInnerHTML={{ __html: artifact.content }} />
-                      }
-                      if (type === 'plot' || type === 'svg' || (type === 'plot' && typeFromTag === 'svg')) {
-                        return <img src={`data:image/svg+xml;base64,${artifact.content}`} alt="Plot" className="plot-image" />
-                      }
-                      if (type === 'html') {
-                         return (
-                            <div className="dashboard-container">
-                              <div className="dashboard-header">Interactive Output</div>
-                              <iframe
-                                title={`Dashboard ${id}`}
-                                srcDoc={artifact.content}
-                                style={{
-                                  width: '100%',
-                                  height: '500px',
-                                  border: 'none',
-                                  backgroundColor: 'white',
-                                  borderRadius: '4px'
-                                }}
-                                sandbox="allow-scripts"
-                              />
-                            </div>
-                         )
-                      }
-                      if (type === 'mermaid') {
-                        return <MermaidChart chart={artifact.content} />
-                      }
-                      if (type === 'markdown') {
-                         return <ReactMarkdown remarkPlugins={[remarkGfm]}>{artifact.content}</ReactMarkdown>
-                      }
-                    }
-                  }
-
-                  return (
-                    <code {...rest} className={className}>
-                      {children}
-                    </code>
-                  )
-                }
-              }}
-            >
-              {msg.content}
-            </ReactMarkdown>
-          )}
-
-          {/* Fallback: Render artifacts that were NOT referenced in text (optional, or just render code/output) */}
-          
-          {/* Code block (collapsible) */}
-          {resp?.code && (
-            <CodeBlock code={resp.code} />
-          )}
-
-          {/* Output */}
-          {resp?.output && (
-            <OutputBlock output={resp.output} />
-          )}
-
-          {/* Error */}
-          {resp?.error && (
-            <div className="error-block">
-              <strong>Error:</strong> {resp.error}
-            </div>
-          )}
-        </div>
-      </div>
-    )
+  function handleAction(action: A2UIAction) {
+    console.log('A2UI action:', action)
   }
 
   return (
@@ -388,8 +195,7 @@ export default function App() {
             {files.map(f => (
               <div className="file-chip" key={f.filename}>
                 <span>{f.filename}</span>
-                <span className="file-info">{f.rows} rows × {f.columns} cols</span>
-                <button className="remove-btn" onClick={() => removeFile(f.filename)}>×</button>
+                <span className="file-info">{f.rows} rows x {f.columns} cols</span>
               </div>
             ))}
           </div>
@@ -409,25 +215,12 @@ export default function App() {
               </div>
             ))}
           </div>
-          {Object.keys(database.saved_tables).length > 0 && (
-            <>
-              <div className="saved-tables-header">Saved Results</div>
-              <div className="table-chips saved">
-                {Object.entries(database.saved_tables).map(([name, info]) => (
-                  <div className="table-chip saved" key={name}>
-                    <span className="table-name">{name.replace('saved_', '')}</span>
-                    <span className="table-info">{info.row_count} rows</span>
-                  </div>
-                ))}
-              </div>
-            </>
-          )}
         </section>
       )}
 
       <section className="chat-section">
         <div className="messages">
-          {messages.length === 0 && (
+          {chatHistory.length === 0 && (
             <div className="welcome">
               <p>Welcome! I can help you analyze data. Try:</p>
               <ul>
@@ -438,7 +231,18 @@ export default function App() {
               </ul>
             </div>
           )}
-          {messages.map((m, i) => renderMessage(m, i))}
+
+          {chatHistory.map((m, i) => (
+            <div className={`msg ${m.role === 'user' ? 'user' : 'assistant'}`} key={i}>
+              <div className="msg-content">
+                {m.role === 'user' ? m.content : null}
+              </div>
+            </div>
+          ))}
+
+          {/* A2UI rendered content */}
+          <A2UIRenderer onAction={handleAction} />
+
           {loading && (
             <div className="msg assistant">
               <div className="msg-content loading">
@@ -469,5 +273,15 @@ export default function App() {
         </div>
       </section>
     </div>
+  )
+}
+
+export default function App() {
+  const [a2uiMessages] = useState<A2UIMessage[]>([])
+
+  return (
+    <A2UIProvider messages={a2uiMessages} catalog={customCatalog}>
+      <ChatApp />
+    </A2UIProvider>
   )
 }
