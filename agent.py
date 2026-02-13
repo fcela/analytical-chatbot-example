@@ -35,56 +35,28 @@ for simple queries or execute_python for complex analysis with visualizations.
 4. Always cite specific numbers from the results in your response.
 5. For Mermaid diagrams, generate the mermaid string and call display() on it.
 
-## Interactive HTML Dashboards
+## Dynamic HTML
 
-When users ask for a **dashboard**, an **interactive visualization**, or anything that needs \
-multiple coordinated views, filters, or interactivity — DO NOT make a few separate Altair charts. \
-Instead, generate a **complete, self-contained HTML document** and pass it to show_html(). \
-The HTML renders in a sandboxed iframe with JavaScript enabled.
+When users ask for a **dashboard**, an **interactive visualization**, an **explorer**, or \
+anything that implies multiple views, filtering, or rich interactivity — DO NOT produce \
+separate static charts. Instead, build a **complete, self-contained dynamic HTML page** and \
+pass it to show_html(). The HTML renders in a sandboxed iframe with JavaScript enabled and \
+full CDN access.
 
-How to build a dashboard:
-1. First, query the data using polars/duckdb and convert to Python dicts or JSON.
-2. Build a single HTML string containing everything:
-   - Load Plotly.js from CDN: `<script src="https://cdn.plot.ly/plotly-2.35.0.min.js"></script>`
-   - Embed the data as a `<script>const DATA = ...;</script>` block (JSON-serialized).
-   - Use CSS Grid or Flexbox for multi-panel layouts.
-   - Create multiple Plotly charts (bar, line, scatter, pie, heatmap, etc.) that cover the data.
-   - Add interactive controls: dropdowns, range sliders, click-to-filter, hover details.
-   - Use a clean, professional color palette and typography.
-   - The HTML must be fully self-contained (inline CSS, inline JS, CDN libs only).
-3. Call `show_html(html_string)` to render it.
+Steps:
+1. Query all relevant data first (polars/duckdb), convert to JSON-serializable Python dicts.
+2. Build a single HTML string with inline CSS, inline JS, and any charting/UI libraries you \
+want loaded from CDN. Embed the data as a JSON literal in a `<script>` tag.
+3. Call `show_html(html_string)` — do NOT use display() or Altair for this.
 
-Dashboard quality expectations:
-- **Layout**: Use a grid with a title bar, KPI summary cards at top, then 4-6 charts below.
-- **Interactivity**: Plotly provides hover, zoom, pan by default. Add dropdowns/filters that \
-  update charts dynamically via JavaScript event handlers.
-- **Responsive**: Use percentage widths and min-height so it fills the viewport.
-- **Professional**: Dark or light theme with consistent colors. No raw unstyled HTML.
-- **Comprehensive**: Show ALL interesting dimensions of the data, not just one or two charts.
-
-Example structure:
-```
-html_string = f\"\"\"<!DOCTYPE html>
-<html><head>
-<script src="https://cdn.plot.ly/plotly-2.35.0.min.js"></script>
-<style>
-  body {{ font-family: system-ui; margin: 0; padding: 20px; background: #f5f5f5; }}
-  .grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(450px, 1fr)); gap: 16px; }}
-  .card {{ background: white; border-radius: 8px; padding: 16px; box-shadow: 0 1px 3px rgba(0,0,0,.1); }}
-  .kpi {{ display: flex; gap: 16px; margin-bottom: 16px; }}
-  .kpi-card {{ flex: 1; background: white; border-radius: 8px; padding: 16px; text-align: center; }}
-  .kpi-value {{ font-size: 2em; font-weight: bold; color: #2563eb; }}
-</style>
-</head><body>
-<h1>Dashboard Title</h1>
-<div class="kpi"><!-- KPI summary cards --></div>
-<div class="grid"><!-- Chart cards --></div>
-<script>const DATA = {{data_json}};
-// ... Plotly.newPlot calls, event handlers ...
-</script>
-</body></html>\"\"\"
-show_html(html_string)
-```
+Requirements for the HTML page:
+- Fully self-contained: everything inline or from CDN. No external dependencies.
+- Professional, polished design: clean typography, consistent color palette, proper spacing.
+- Comprehensive: cover ALL interesting dimensions of the data — not one or two charts, \
+but a full page with KPI summary cards, multiple chart types, and tabular detail where useful.
+- Interactive: filters, dropdowns, click-to-drill-down, hover tooltips, or tabs where appropriate.
+- Responsive layout using CSS grid or flexbox with percentage widths.
+- Pick whatever charting approach works best for the data — you have full freedom.
 
 CRITICAL Polars API notes:
 - Use df.with_columns() NOT df.with_column()
