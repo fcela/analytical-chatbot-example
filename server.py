@@ -106,14 +106,21 @@ async def message_stream(request: Request):
     session = get_or_create_session(context_id)
 
     async def event_stream():
-        set_kernel(session["kernel"])
         try:
             input_messages = list(session["history"])
             input_messages.append({"role": "user", "content": user_text})
 
+            kernel = session["kernel"]
+
+            def _run_agent():
+                set_kernel(kernel)
+                try:
+                    return agent.invoke({"messages": input_messages})
+                finally:
+                    set_kernel(None)
+
             result = await asyncio.get_event_loop().run_in_executor(
-                None,
-                lambda: agent.invoke({"messages": input_messages}),
+                None, _run_agent
             )
 
             result_messages = result.get("messages", [])
@@ -167,8 +174,6 @@ async def message_stream(request: Request):
         except Exception as e:
             logger.exception("Agent execution error")
             yield f"data: {json.dumps({'error': str(e)})}\n\n"
-        finally:
-            set_kernel(None)
 
     return StreamingResponse(
         event_stream(),
@@ -198,51 +203,55 @@ async def message_send(request: Request):
         raise HTTPException(status_code=400, detail="No text content in message")
 
     session = get_or_create_session(context_id)
-    set_kernel(session["kernel"])
 
-    try:
-        input_messages = list(session["history"])
-        input_messages.append({"role": "user", "content": user_text})
+    input_messages = list(session["history"])
+    input_messages.append({"role": "user", "content": user_text})
 
-        result = await asyncio.get_event_loop().run_in_executor(
-            None,
-            lambda: agent.invoke({"messages": input_messages}),
-        )
+    kernel = session["kernel"]
 
-        result_messages = result.get("messages", [])
-        assistant_msg = ""
-        artifacts = {}
+    def _run_agent():
+        set_kernel(kernel)
+        try:
+            return agent.invoke({"messages": input_messages})
+        finally:
+            set_kernel(None)
 
-        for msg in result_messages:
-            if hasattr(msg, "content") and hasattr(msg, "type"):
-                if msg.type == "ai":
-                    assistant_msg = msg.content if isinstance(msg.content, str) else ""
-                elif msg.type == "tool":
-                    try:
-                        tool_result = json.loads(msg.content) if isinstance(msg.content, str) else {}
-                        if isinstance(tool_result, dict) and tool_result.get("artifacts"):
-                            artifacts.update(tool_result["artifacts"])
-                    except (json.JSONDecodeError, TypeError):
-                        pass
+    result = await asyncio.get_event_loop().run_in_executor(
+        None, _run_agent
+    )
 
-        session["history"].append({"role": "user", "content": user_text})
-        session["history"].append({"role": "assistant", "content": assistant_msg})
+    result_messages = result.get("messages", [])
+    assistant_msg = ""
+    artifacts = {}
 
-        a2ui_messages = create_chat_surface(
-            message_text=assistant_msg,
-            artifacts=artifacts,
-        )
+    for msg in result_messages:
+        if hasattr(msg, "content") and hasattr(msg, "type"):
+            if msg.type == "ai":
+                assistant_msg = msg.content if isinstance(msg.content, str) else ""
+            elif msg.type == "tool":
+                try:
+                    tool_result = json.loads(msg.content) if isinstance(msg.content, str) else {}
+                    if isinstance(tool_result, dict) and tool_result.get("artifacts"):
+                        artifacts.update(tool_result["artifacts"])
+                except (json.JSONDecodeError, TypeError):
+                    pass
 
-        return {
-            "contextId": context_id,
-            "status": {"state": "completed"},
-            "parts": [
-                {"root": {"data": msg, "metadata": {"mimeType": "application/json+a2ui"}}}
-                for msg in a2ui_messages
-            ],
-        }
-    finally:
-        set_kernel(None)
+    session["history"].append({"role": "user", "content": user_text})
+    session["history"].append({"role": "assistant", "content": assistant_msg})
+
+    a2ui_messages = create_chat_surface(
+        message_text=assistant_msg,
+        artifacts=artifacts,
+    )
+
+    return {
+        "contextId": context_id,
+        "status": {"state": "completed"},
+        "parts": [
+            {"root": {"data": msg, "metadata": {"mimeType": "application/json+a2ui"}}}
+            for msg in a2ui_messages
+        ],
+    }
 
 
 @app.post("/upload")
