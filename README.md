@@ -1,107 +1,90 @@
-# Analytical Chatbot (A2A Agent + PocketFlow + React)
+# Analytical Chatbot (A2A + A2UI + DeepAgents)
 
-This directory contains the reusable modules that power the analytical chatbot: the PocketFlow nodes, sandbox kernel, and documentation. The runnable entrypoints live at the repo root (`main.py`, `rest_server.py`, `a2a_server.py`).
+AI-powered data analysis assistant with code execution and visualization. Uses Google's [A2UI protocol](https://a2ui.org/) for agent-to-UI communication and the [A2A protocol](https://google.github.io/A2A/) for agent interoperability.
 
-## How the pieces fit
+## Architecture
 
 ```
-Browser (React)  ->  BFF REST (rest_server.py)  ->  A2A gRPC (a2a_server.py)
-                                                         |
-                                                         v
-                                               AgentExecutor + PocketFlow
-                                                         |
-                                                         v
-                                                Sandboxed Kernel (Docker or multiprocessing)
+React App (@a2ui-sdk/react)
+    ↕ SSE (A2UI JSONL down) + POST (userActions up)
+A2A Server (FastAPI + A2UI extension)
+    ↕
+DeepAgent (LangGraph create_deep_agent)
+    ↕
+Custom Tools: execute_python, query_database, get_database_schema
+    ↕
+Sandboxed Kernel (Docker or Multiprocessing) + DuckDB
 ```
 
 ## Key Modules
 
-- `utils/flow.py`: PocketFlow orchestration
-- `utils/sandbox_factory.py`: Auto-detects and creates the best available sandbox backend
-- `utils/llm_sandbox_kernel.py`: Docker-based sandbox using llm-sandbox library
-- `utils/sandbox.py`, `utils/kernel.py`: Multiprocessing sandbox fallback
+- `server.py`: FastAPI server with A2A endpoints, A2UI streaming, file upload
+- `agent.py`: DeepAgent configuration with custom tools and system prompt
+- `tools/`: Custom LangChain tools for sandbox execution and database queries
+- `a2ui_adapter.py`: Translates agent output to A2UI v0.8 JSONL messages
+- `frontend/`: React app with `@a2ui-sdk/react` and custom component catalog
+- `utils/sandbox_factory.py`: Auto-detects best sandbox backend
 - `utils/database.py`: DuckDB helpers and schema
 - `utils/call_llm.py`: LLM wrapper and provider selection
 
-## Quickstart (from repo root)
+## Quickstart
 
 ```bash
+# Install Python dependencies
 pip install -r requirements.txt
-python main.py
-```
 
-Then start the UI:
+# Start the backend
+python server.py
 
-```bash
+# In another terminal, start the frontend
 cd frontend && npm install && npm run dev
 ```
 
-## Sandbox Configuration
+Open http://localhost:5173 to use the chatbot.
 
-The chatbot supports two sandbox backends for executing Python code:
+## Environment Variables
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `LLM_PROVIDER` | `openai` or `anthropic` | `openai` |
+| `OPENAI_API_KEY` | OpenAI API key | — |
+| `OPENAI_MODEL` | OpenAI model name | `gpt-4o` |
+| `ANTHROPIC_API_KEY` | Anthropic API key | — |
+| `ANTHROPIC_MODEL` | Anthropic model name | `claude-sonnet-4-5-20250929` |
+| `SANDBOX_FORCE_BACKEND` | Force `docker` or `multiprocessing` | Auto-detect |
+| `SANDBOX_DOCKER_IMAGE` | Custom Docker image | Default Python image |
+| `SANDBOX_TIMEOUT` | Execution timeout in seconds | `30` |
+| `HOST` | Server host | `0.0.0.0` |
+| `PORT` | Server port | `8000` |
+
+## Sandbox Configuration
 
 | Backend | Isolation | Startup | Use Case |
 |---------|-----------|---------|----------|
 | **Docker** (llm-sandbox) | Full container isolation | ~2-30s | Production, untrusted code |
 | **Multiprocessing** | Process isolation | Instant | Development, trusted environments |
 
-### Environment Variables
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `SANDBOX_FORCE_BACKEND` | Force `docker` or `multiprocessing` | Auto-detect |
-| `SANDBOX_PREFER_DOCKER` | Prefer Docker when available | `true` |
-| `SANDBOX_TIMEOUT` | Execution timeout in seconds | `30` |
-| `SANDBOX_DOCKER_IMAGE` | Custom Docker image | Default Python image |
-| `SANDBOX_SKIP_INSTALL` | Skip pip install in container | Auto-detect |
-
 ### Using Docker Backend
 
 ```bash
-# Basic Docker backend (slow first startup due to pip install)
-SANDBOX_FORCE_BACKEND=docker python main.py
-
-# With pre-built image (fast startup)
+# Build pre-configured image (recommended)
 ./docker/build-sandbox-image.sh
-SANDBOX_DOCKER_IMAGE=analytical-chatbot-sandbox:latest SANDBOX_FORCE_BACKEND=docker python main.py
+
+# Start with Docker sandbox
+SANDBOX_DOCKER_IMAGE=analytical-chatbot-sandbox:latest SANDBOX_FORCE_BACKEND=docker python server.py
 ```
 
 ### Using Multiprocessing Backend
 
 ```bash
-SANDBOX_FORCE_BACKEND=multiprocessing python main.py
+SANDBOX_FORCE_BACKEND=multiprocessing python server.py
 ```
 
-## Pre-built Docker Image
+## A2A Agent Card
 
-For fast Docker startup (~2-3s instead of ~30-60s), build the pre-configured image:
-
-```bash
-# Build once
-./docker/build-sandbox-image.sh
-
-# Use it
-export SANDBOX_DOCKER_IMAGE=analytical-chatbot-sandbox:latest
-export SANDBOX_FORCE_BACKEND=docker
-python main.py
-```
-
-The pre-built image includes: pandas, numpy, polars, pyarrow, altair, vl-convert-python, duckdb, tabulate.
-
-## Logging
-
-The sandbox system provides detailed logging to help debug issues:
-
-```
-[SANDBOX] Creating sandbox instance...
-[SANDBOX] SANDBOX_FORCE_BACKEND=docker -> forcing 'docker' backend
-[SANDBOX] SUCCESS: Using Docker backend via llm-sandbox (FORCED)
-[DOCKER-SANDBOX] Starting Docker sandbox session...
-[DOCKER-SANDBOX] Docker sandbox session started successfully!
-```
-
-Set `LOG_LEVEL=DEBUG` for more verbose output.
+The server exposes an A2A agent card at `/.well-known/agent-card.json` with A2UI extension capability. Other A2A agents can discover and communicate with this agent.
 
 ## Documentation
 
-- `docs/design.md` explains the A2A + PocketFlow dataflow, sandbox architecture, and artifact pipeline.
+- `docs/plans/2026-02-12-a2ui-refactor-design.md`: Architecture design document
+- `docs/plans/2026-02-12-a2ui-refactor-plan.md`: Implementation plan
