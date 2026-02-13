@@ -174,114 +174,110 @@ function ChatApp() {
   }
 
   return (
-    <div className="app">
-      <header>
-        <h1>Analytical Chatbot</h1>
-        <p className="subtitle">Upload data, ask questions, get insights</p>
-      </header>
+    <A2UIProvider messages={a2uiMessages} catalog={customCatalog}>
+      <div className="app">
+        <header>
+          <h1>Analytical Chatbot</h1>
+          <p className="subtitle">Upload data, ask questions, get insights</p>
+        </header>
 
-      <section className="files-section">
-        <div className="files-header">
-          <h2>Data Files</h2>
-          <label className="upload-btn">
-            + Upload
-            <input type="file" accept=".csv,.json" onChange={handleUpload} hidden />
-          </label>
-        </div>
-        {files.length === 0 ? (
-          <p className="no-files">No files uploaded. Upload a CSV or JSON file to analyze.</p>
-        ) : (
-          <div className="file-chips">
-            {files.map(f => (
-              <div className="file-chip" key={f.filename}>
-                <span>{f.filename}</span>
-                <span className="file-info">{f.rows} rows x {f.columns} cols</span>
-              </div>
-            ))}
+        <section className="files-section">
+          <div className="files-header">
+            <h2>Data Files</h2>
+            <label className="upload-btn">
+              + Upload
+              <input type="file" accept=".csv,.json" onChange={handleUpload} hidden />
+            </label>
           </div>
+          {files.length === 0 ? (
+            <p className="no-files">No files uploaded. Upload a CSV or JSON file to analyze.</p>
+          ) : (
+            <div className="file-chips">
+              {files.map(f => (
+                <div className="file-chip" key={f.filename}>
+                  <span>{f.filename}</span>
+                  <span className="file-info">{f.rows} rows x {f.columns} cols</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+
+        {database?.available && (
+          <section className="database-section">
+            <div className="database-header">
+              <h2>Database Tables</h2>
+            </div>
+            <div className="table-chips">
+              {Object.entries(database.tables).map(([name, info]) => (
+                <div className="table-chip" key={name}>
+                  <span className="table-name">{name}</span>
+                  <span className="table-info">{info.row_count} rows</span>
+                </div>
+              ))}
+            </div>
+          </section>
         )}
-      </section>
 
-      {database?.available && (
-        <section className="database-section">
-          <div className="database-header">
-            <h2>Database Tables</h2>
-          </div>
-          <div className="table-chips">
-            {Object.entries(database.tables).map(([name, info]) => (
-              <div className="table-chip" key={name}>
-                <span className="table-name">{name}</span>
-                <span className="table-info">{info.row_count} rows</span>
+        <section className="chat-section">
+          <div className="messages">
+            {chatHistory.length === 0 && (
+              <div className="welcome">
+                <p>Welcome! I can help you analyze data. Try:</p>
+                <ul>
+                  <li>"Show employees with salary over 90k"</li>
+                  <li>"What are the total sales by region?"</li>
+                  <li>"Create a bar chart of products by category"</li>
+                  <li>"Join sales with products and show top sellers"</li>
+                </ul>
+              </div>
+            )}
+
+            {chatHistory.map((m, i) => (
+              <div className={`msg ${m.role === 'user' ? 'user' : 'assistant'}`} key={i}>
+                <div className="msg-content">
+                  {m.role === 'user' ? m.content : null}
+                </div>
               </div>
             ))}
+
+            {/* A2UI rendered content */}
+            <A2UIRenderer onAction={handleAction} />
+
+            {loading && (
+              <div className="msg assistant">
+                <div className="msg-content loading">
+                  <span className="dot"></span>
+                  <span className="dot"></span>
+                  <span className="dot"></span>
+                </div>
+              </div>
+            )}
+            <div ref={messagesEndRef} />
+          </div>
+
+          <div className="composer">
+            <input
+              value={input}
+              onChange={e => setInput(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && !e.shiftKey && sendMessage()}
+              placeholder="Ask a question or request analysis..."
+              disabled={loading}
+            />
+            <button onClick={sendMessage} disabled={loading || !input.trim()}>
+              Send
+            </button>
+          </div>
+
+          <div className="actions">
+            <button className="clear-btn" onClick={clearSession}>Clear Session</button>
           </div>
         </section>
-      )}
-
-      <section className="chat-section">
-        <div className="messages">
-          {chatHistory.length === 0 && (
-            <div className="welcome">
-              <p>Welcome! I can help you analyze data. Try:</p>
-              <ul>
-                <li>"Show employees with salary over 90k"</li>
-                <li>"What are the total sales by region?"</li>
-                <li>"Create a bar chart of products by category"</li>
-                <li>"Join sales with products and show top sellers"</li>
-              </ul>
-            </div>
-          )}
-
-          {chatHistory.map((m, i) => (
-            <div className={`msg ${m.role === 'user' ? 'user' : 'assistant'}`} key={i}>
-              <div className="msg-content">
-                {m.role === 'user' ? m.content : null}
-              </div>
-            </div>
-          ))}
-
-          {/* A2UI rendered content */}
-          <A2UIRenderer onAction={handleAction} />
-
-          {loading && (
-            <div className="msg assistant">
-              <div className="msg-content loading">
-                <span className="dot"></span>
-                <span className="dot"></span>
-                <span className="dot"></span>
-              </div>
-            </div>
-          )}
-          <div ref={messagesEndRef} />
-        </div>
-
-        <div className="composer">
-          <input
-            value={input}
-            onChange={e => setInput(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && !e.shiftKey && sendMessage()}
-            placeholder="Ask a question or request analysis..."
-            disabled={loading}
-          />
-          <button onClick={sendMessage} disabled={loading || !input.trim()}>
-            Send
-          </button>
-        </div>
-
-        <div className="actions">
-          <button className="clear-btn" onClick={clearSession}>Clear Session</button>
-        </div>
-      </section>
-    </div>
+      </div>
+    </A2UIProvider>
   )
 }
 
 export default function App() {
-  const [a2uiMessages] = useState<A2UIMessage[]>([])
-
-  return (
-    <A2UIProvider messages={a2uiMessages} catalog={customCatalog}>
-      <ChatApp />
-    </A2UIProvider>
-  )
+  return <ChatApp />
 }

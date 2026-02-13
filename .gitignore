@@ -41,3 +41,5 @@ CLAUDE.md
 # OS
 .DS_Store
 Thumbs.db
+frontend/src/*.js
+frontend/src/**/*.js
