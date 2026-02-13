@@ -257,9 +257,11 @@ function ChatApp() {
               <div className="msg assistant">
                 <div className="msg-content loading">
                   <span className="status-text">{statusText || 'Thinking...'}</span>
-                  <span className="dot"></span>
-                  <span className="dot"></span>
-                  <span className="dot"></span>
+                  <span className="dots">
+                    <span className="dot"></span>
+                    <span className="dot"></span>
+                    <span className="dot"></span>
+                  </span>
                 </div>
               </div>
             )}
