@@ -10,19 +10,37 @@ interface HtmlViewerProps {
 
 export function HtmlViewer({ surfaceId, html }: HtmlViewerProps) {
     const htmlContent = useDataBinding<string>(surfaceId, html, '')
+    const iframeRef = React.useRef<HTMLIFrameElement>(null)
+
+    // Auto-resize iframe to fit content
+    React.useEffect(() => {
+        const iframe = iframeRef.current
+        if (!iframe) return
+        const resize = () => {
+            try {
+                const doc = iframe.contentDocument || iframe.contentWindow?.document
+                if (doc?.body) {
+                    iframe.style.height = Math.max(600, doc.body.scrollHeight + 40) + 'px'
+                }
+            } catch { /* cross-origin — keep default height */ }
+        }
+        iframe.addEventListener('load', resize)
+        return () => iframe.removeEventListener('load', resize)
+    }, [htmlContent])
+
     if (!htmlContent) return null
     return (
         <div className="dashboard-container">
-            <div className="dashboard-header">Interactive Output</div>
             <iframe
+                ref={iframeRef}
                 title="Dashboard"
                 srcDoc={htmlContent}
                 style={{
                     width: '100%',
-                    height: '500px',
+                    minHeight: '600px',
                     border: 'none',
                     backgroundColor: 'white',
-                    borderRadius: '4px',
+                    borderRadius: '8px',
                 }}
                 sandbox="allow-scripts"
             />
