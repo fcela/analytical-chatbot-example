@@ -199,13 +199,26 @@ def create_chat_surface(
     })
 
     if data_contents:
-        messages.append({
-            "dataModelUpdate": {
-                "surfaceId": surface_id,
-                "path": "/response",
-                "contents": data_contents,
-            }
-        })
+        # Separate artifact data from response data (code, output)
+        artifact_data = [d for d in data_contents if d["key"] not in ("code", "output")]
+        response_data = [d for d in data_contents if d["key"] in ("code", "output")]
+
+        if artifact_data:
+            messages.append({
+                "dataModelUpdate": {
+                    "surfaceId": surface_id,
+                    "path": "/artifacts",
+                    "contents": artifact_data,
+                }
+            })
+        if response_data:
+            messages.append({
+                "dataModelUpdate": {
+                    "surfaceId": surface_id,
+                    "path": "/response",
+                    "contents": response_data,
+                }
+            })
 
     messages.append({
         "beginRendering": {

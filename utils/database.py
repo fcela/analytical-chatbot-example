@@ -169,24 +169,33 @@ def _initialize_sample_data(conn: "duckdb.DuckDBPyConnection"):
     print("  - customers (10 rows)")
 
 
-def execute_query(sql: str) -> "pl.DataFrame":
+def execute_query(sql: str):
     """
-    Execute a SQL query and return results as a Polars DataFrame.
+    Execute a SQL query and return results as a formatted string.
 
     Args:
         sql: SQL query string
 
     Returns:
-        Polars DataFrame with query results
+        Formatted table string with query results
     """
     if not HAS_DUCKDB:
         raise RuntimeError("DuckDB is not installed")
-    if not HAS_POLARS:
-        raise RuntimeError("Polars is not installed")
 
     conn = get_connection()
-    result = conn.execute(sql).pl()
-    return result
+    result = conn.execute(sql)
+    columns = [desc[0] for desc in result.description]
+    rows = result.fetchall()
+
+    if not rows:
+        return "Query returned no results."
+
+    # Format as a readable table
+    lines = [" | ".join(columns)]
+    lines.append("-" * len(lines[0]))
+    for row in rows:
+        lines.append(" | ".join(str(v) for v in row))
+    return "\n".join(lines)
 
 
 def get_table_info() -> dict:

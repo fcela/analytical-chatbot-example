@@ -6,6 +6,7 @@ import io
 import json
 import logging
 import os
+import re
 import uuid
 from typing import Any
 
@@ -131,21 +132,33 @@ async def message_stream(request: Request):
             error = None
 
             for msg in result_messages:
+                # Extract code from tool_calls (on AIMessage)
+                if hasattr(msg, 'tool_calls') and msg.tool_calls:
+                    for tc in msg.tool_calls:
+                        if tc.get('name') == 'execute_python':
+                            code = tc.get('args', {}).get('code')
+
                 if hasattr(msg, "content") and hasattr(msg, "type"):
                     if msg.type == "ai":
-                        assistant_msg = msg.content if isinstance(msg.content, str) else ""
+                        # Take the last non-empty AI message as the response
+                        if isinstance(msg.content, str) and msg.content.strip():
+                            assistant_msg = msg.content
                     elif msg.type == "tool":
                         try:
                             tool_result = json.loads(msg.content) if isinstance(msg.content, str) else {}
                             if isinstance(tool_result, dict):
-                                if tool_result.get("success") is not None:
-                                    if tool_result.get("success"):
-                                        output = tool_result.get("stdout", "")
-                                        artifacts.update(tool_result.get("artifacts", {}))
-                                    else:
-                                        error = tool_result.get("error")
+                                if tool_result.get("success"):
+                                    output = tool_result.get("stdout", "")
+                                    artifacts.update(tool_result.get("artifacts", {}))
+                                    error = None  # Clear error from earlier failures
+                                elif tool_result.get("success") is False:
+                                    error = tool_result.get("error")
                         except (json.JSONDecodeError, TypeError):
                             pass
+
+            # Strip inline image references from text since plots render via A2UI PlotViewer
+            # Matches both attachment:// links and data:image/ base64-encoded URIs
+            assistant_msg = re.sub(r'!\[.*?\]\((attachment://[^)]+|data:image/[^)]+)\)\s*', '', assistant_msg).strip()
 
             session["history"].append({"role": "user", "content": user_text})
             session["history"].append({"role": "assistant", "content": assistant_msg})
