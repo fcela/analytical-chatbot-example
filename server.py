@@ -1,7 +1,6 @@
 """A2UI-enabled A2A server for the analytical chatbot."""
 
 import asyncio
-import base64
 import io
 import json
 import logging
@@ -12,13 +11,13 @@ from typing import Any
 
 import polars as pl
 import uvicorn
-from fastapi import FastAPI, UploadFile, File, HTTPException, Request, Response
+from fastapi import FastAPI, UploadFile, File, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import StreamingResponse
 
 from agent import create_agent
-from a2ui_adapter import create_chat_surface, to_jsonl
-from tools._runtime import set_kernel, get_kernel
+from a2ui_adapter import create_chat_surface
+from tools._runtime import set_kernel
 from utils.sandbox_factory import create_sandbox
 
 logging.basicConfig(
@@ -51,6 +50,61 @@ def get_or_create_session(context_id: str) -> dict[str, Any]:
             "files": [],
         }
     return sessions[context_id]
+
+
+def extract_user_text(message: dict) -> str:
+    """Extract user text from an A2A message's parts."""
+    for part in message.get("parts", []):
+        if "text" in part:
+            return part["text"]
+        if "root" in part and "text" in part["root"]:
+            return part["root"]["text"]
+    return ""
+
+
+def extract_agent_result(result_messages: list) -> dict[str, Any]:
+    """Extract structured data from LangGraph agent result messages."""
+    assistant_msg = ""
+    code = None
+    output = None
+    artifacts: dict[str, Any] = {}
+    error = None
+
+    for msg in result_messages:
+        if hasattr(msg, "tool_calls") and msg.tool_calls:
+            for tc in msg.tool_calls:
+                if tc.get("name") == "execute_python":
+                    code = tc.get("args", {}).get("code")
+
+        if hasattr(msg, "content") and hasattr(msg, "type"):
+            if msg.type == "ai":
+                if isinstance(msg.content, str) and msg.content.strip():
+                    assistant_msg = msg.content
+            elif msg.type == "tool":
+                try:
+                    tool_result = json.loads(msg.content) if isinstance(msg.content, str) else {}
+                    if isinstance(tool_result, dict):
+                        if tool_result.get("success"):
+                            output = tool_result.get("stdout", "")
+                            artifacts.update(tool_result.get("artifacts", {}))
+                            error = None
+                        elif tool_result.get("success") is False:
+                            error = tool_result.get("error")
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
+    # Strip inline image references — plots render via A2UI PlotViewer
+    assistant_msg = re.sub(
+        r"!\[.*?\]\((attachment://[^)]+|data:image/[^)]+)\)\s*", "", assistant_msg
+    ).strip()
+
+    return {
+        "text": assistant_msg,
+        "code": code,
+        "output": output,
+        "artifacts": artifacts,
+        "error": error,
+    }
 
 
 @app.get("/")
@@ -88,19 +142,35 @@ def agent_card():
     }
 
 
+async def _invoke_agent(session: dict[str, Any], user_text: str) -> dict[str, Any]:
+    """Run the agent in an executor thread and return extracted results."""
+    input_messages = list(session["history"])
+    input_messages.append({"role": "user", "content": user_text})
+    kernel = session["kernel"]
+
+    def _run():
+        set_kernel(kernel)
+        try:
+            return agent.invoke({"messages": input_messages})
+        finally:
+            set_kernel(None)
+
+    result = await asyncio.get_event_loop().run_in_executor(None, _run)
+    extracted = extract_agent_result(result.get("messages", []))
+
+    session["history"].append({"role": "user", "content": user_text})
+    session["history"].append({"role": "assistant", "content": extracted["text"]})
+
+    return extracted
+
+
 @app.post("/a2a/message/stream")
 async def message_stream(request: Request):
     body = await request.json()
     message = body.get("message", {})
     context_id = message.get("contextId") or message.get("context_id") or str(uuid.uuid4())
 
-    user_text = ""
-    for part in message.get("parts", []):
-        if "text" in part:
-            user_text = part["text"]
-        elif "root" in part and "text" in part["root"]:
-            user_text = part["root"]["text"]
-
+    user_text = extract_user_text(message)
     if not user_text:
         raise HTTPException(status_code=400, detail="No text content in message")
 
@@ -108,67 +178,14 @@ async def message_stream(request: Request):
 
     async def event_stream():
         try:
-            input_messages = list(session["history"])
-            input_messages.append({"role": "user", "content": user_text})
-
-            kernel = session["kernel"]
-
-            def _run_agent():
-                set_kernel(kernel)
-                try:
-                    return agent.invoke({"messages": input_messages})
-                finally:
-                    set_kernel(None)
-
-            result = await asyncio.get_event_loop().run_in_executor(
-                None, _run_agent
-            )
-
-            result_messages = result.get("messages", [])
-            assistant_msg = ""
-            code = None
-            output = None
-            artifacts = {}
-            error = None
-
-            for msg in result_messages:
-                # Extract code from tool_calls (on AIMessage)
-                if hasattr(msg, 'tool_calls') and msg.tool_calls:
-                    for tc in msg.tool_calls:
-                        if tc.get('name') == 'execute_python':
-                            code = tc.get('args', {}).get('code')
-
-                if hasattr(msg, "content") and hasattr(msg, "type"):
-                    if msg.type == "ai":
-                        # Take the last non-empty AI message as the response
-                        if isinstance(msg.content, str) and msg.content.strip():
-                            assistant_msg = msg.content
-                    elif msg.type == "tool":
-                        try:
-                            tool_result = json.loads(msg.content) if isinstance(msg.content, str) else {}
-                            if isinstance(tool_result, dict):
-                                if tool_result.get("success"):
-                                    output = tool_result.get("stdout", "")
-                                    artifacts.update(tool_result.get("artifacts", {}))
-                                    error = None  # Clear error from earlier failures
-                                elif tool_result.get("success") is False:
-                                    error = tool_result.get("error")
-                        except (json.JSONDecodeError, TypeError):
-                            pass
-
-            # Strip inline image references from text since plots render via A2UI PlotViewer
-            # Matches both attachment:// links and data:image/ base64-encoded URIs
-            assistant_msg = re.sub(r'!\[.*?\]\((attachment://[^)]+|data:image/[^)]+)\)\s*', '', assistant_msg).strip()
-
-            session["history"].append({"role": "user", "content": user_text})
-            session["history"].append({"role": "assistant", "content": assistant_msg})
+            extracted = await _invoke_agent(session, user_text)
 
             a2ui_messages = create_chat_surface(
-                message_text=assistant_msg,
-                code=code,
-                output=output,
-                artifacts=artifacts,
-                error=error,
+                message_text=extracted["text"],
+                code=extracted["code"],
+                output=extracted["output"],
+                artifacts=extracted["artifacts"],
+                error=extracted["error"],
             )
 
             for a2ui_msg in a2ui_messages:
@@ -205,56 +222,19 @@ async def message_send(request: Request):
     message = body.get("message", {})
     context_id = message.get("contextId") or message.get("context_id") or str(uuid.uuid4())
 
-    user_text = ""
-    for part in message.get("parts", []):
-        if "text" in part:
-            user_text = part["text"]
-        elif "root" in part and "text" in part["root"]:
-            user_text = part["root"]["text"]
-
+    user_text = extract_user_text(message)
     if not user_text:
         raise HTTPException(status_code=400, detail="No text content in message")
 
     session = get_or_create_session(context_id)
-
-    input_messages = list(session["history"])
-    input_messages.append({"role": "user", "content": user_text})
-
-    kernel = session["kernel"]
-
-    def _run_agent():
-        set_kernel(kernel)
-        try:
-            return agent.invoke({"messages": input_messages})
-        finally:
-            set_kernel(None)
-
-    result = await asyncio.get_event_loop().run_in_executor(
-        None, _run_agent
-    )
-
-    result_messages = result.get("messages", [])
-    assistant_msg = ""
-    artifacts = {}
-
-    for msg in result_messages:
-        if hasattr(msg, "content") and hasattr(msg, "type"):
-            if msg.type == "ai":
-                assistant_msg = msg.content if isinstance(msg.content, str) else ""
-            elif msg.type == "tool":
-                try:
-                    tool_result = json.loads(msg.content) if isinstance(msg.content, str) else {}
-                    if isinstance(tool_result, dict) and tool_result.get("artifacts"):
-                        artifacts.update(tool_result["artifacts"])
-                except (json.JSONDecodeError, TypeError):
-                    pass
-
-    session["history"].append({"role": "user", "content": user_text})
-    session["history"].append({"role": "assistant", "content": assistant_msg})
+    extracted = await _invoke_agent(session, user_text)
 
     a2ui_messages = create_chat_surface(
-        message_text=assistant_msg,
-        artifacts=artifacts,
+        message_text=extracted["text"],
+        code=extracted["code"],
+        output=extracted["output"],
+        artifacts=extracted["artifacts"],
+        error=extracted["error"],
     )
 
     return {

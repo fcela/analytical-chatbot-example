@@ -233,13 +233,13 @@ function ChatApp() {
               </div>
             )}
 
-            {chatHistory.map((m, i) => (
-              <div className={`msg ${m.role === 'user' ? 'user' : 'assistant'}`} key={i}>
-                <div className="msg-content">
-                  {m.role === 'user' ? m.content : null}
+            {chatHistory
+              .filter(m => m.role === 'user')
+              .map((m, i) => (
+                <div className="msg user" key={i}>
+                  <div className="msg-content">{m.content}</div>
                 </div>
-              </div>
-            ))}
+              ))}
 
             {/* A2UI rendered content */}
             <A2UIRenderer onAction={handleAction} />
