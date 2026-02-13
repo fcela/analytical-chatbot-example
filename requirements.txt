@@ -1,8 +1,12 @@
-# Core framework
-pocketflow
+# Agent framework
+deepagents>=0.4
+langgraph>=0.4
+langgraph-api>=0.4.21
+langchain>=0.3
 
-# A2A Protocol SDK (Agent-to-Agent)
-a2a
+# LLM providers for LangChain
+langchain-openai
+langchain-anthropic
 
 # Web server
 fastapi
@@ -10,9 +14,9 @@ uvicorn
 starlette
 python-multipart
 pydantic
-httpx  # For A2A client examples
+httpx
 
-# LLM clients (install based on LLM_PROVIDER choice)
+# LLM clients (used by utils/call_llm.py for standalone usage)
 openai
 anthropic
 ollama
@@ -29,8 +33,4 @@ duckdb
 pyyaml
 
 # Optional: For Docker-based code sandboxing (requires Docker)
-# Install with: pip install 'llm-sandbox[docker]'
 llm-sandbox[docker]
-
-# RestrictedPython (alternative sandboxing, not currently used)
-# RestrictedPython
