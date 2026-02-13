@@ -5,6 +5,7 @@ import io
 import json
 import logging
 import os
+import queue
 import re
 import uuid
 from typing import Any
@@ -142,8 +143,15 @@ def agent_card():
     }
 
 
+TOOL_STATUS = {
+    "get_database_schema": "Inspecting database schema...",
+    "query_database": "Running SQL query...",
+    "execute_python": "Running code in sandbox...",
+}
+
+
 async def _invoke_agent(session: dict[str, Any], user_text: str) -> dict[str, Any]:
-    """Run the agent in an executor thread and return extracted results."""
+    """Run the agent synchronously and return extracted results (for message/send)."""
     input_messages = list(session["history"])
     input_messages.append({"role": "user", "content": user_text})
     kernel = session["kernel"]
@@ -164,6 +172,54 @@ async def _invoke_agent(session: dict[str, Any], user_text: str) -> dict[str, An
     return extracted
 
 
+def _stream_agent_to_queue(
+    q: queue.Queue,
+    session: dict[str, Any],
+    user_text: str,
+) -> None:
+    """Run agent.stream() in a worker thread and push events to a queue."""
+    input_messages = list(session["history"])
+    input_messages.append({"role": "user", "content": user_text})
+    kernel = session["kernel"]
+
+    set_kernel(kernel)
+    try:
+        all_messages: list = []
+        for chunk in agent.stream({"messages": input_messages}):
+            # LangGraph stream chunks: {"node_name": {"messages": [...]}}
+            for node_name, state_update in chunk.items():
+                msgs = state_update.get("messages", [])
+                for msg in msgs:
+                    all_messages.append(msg)
+
+                    # Detect tool calls -> progress
+                    if hasattr(msg, "tool_calls") and msg.tool_calls:
+                        for tc in msg.tool_calls:
+                            name = tc.get("name", "")
+                            status = TOOL_STATUS.get(name, f"Using {name}...")
+                            q.put(("progress", status))
+
+                    # Detect tool result -> progress
+                    if hasattr(msg, "type") and msg.type == "tool":
+                        tool_name = getattr(msg, "name", "")
+                        if tool_name == "execute_python":
+                            q.put(("progress", "Processing results..."))
+                        elif tool_name == "get_database_schema":
+                            q.put(("progress", "Analyzing schema..."))
+
+                    # Detect AI response text being generated
+                    if hasattr(msg, "type") and msg.type == "ai":
+                        if isinstance(getattr(msg, "content", ""), str) and msg.content.strip():
+                            if not (hasattr(msg, "tool_calls") and msg.tool_calls):
+                                q.put(("progress", "Composing response..."))
+
+        q.put(("done", all_messages))
+    except Exception as e:
+        q.put(("error", e))
+    finally:
+        set_kernel(None)
+
+
 @app.post("/a2a/message/stream")
 async def message_stream(request: Request):
     body = await request.json()
@@ -178,7 +234,37 @@ async def message_stream(request: Request):
 
     async def event_stream():
         try:
-            extracted = await _invoke_agent(session, user_text)
+            q: queue.Queue = queue.Queue()
+            loop = asyncio.get_event_loop()
+
+            # Start streaming in background thread
+            loop.run_in_executor(None, _stream_agent_to_queue, q, session, user_text)
+
+            # Yield progress as SSE events until done
+            yield f"data: {json.dumps({'progress': 'Thinking...'})}\n\n"
+
+            all_messages = None
+            while True:
+                try:
+                    kind, payload = await asyncio.wait_for(
+                        loop.run_in_executor(None, q.get, True, 30.0),
+                        timeout=60.0,
+                    )
+                except (asyncio.TimeoutError, queue.Empty):
+                    yield f"data: {json.dumps({'progress': 'Still working...'})}\n\n"
+                    continue
+
+                if kind == "progress":
+                    yield f"data: {json.dumps({'progress': payload})}\n\n"
+                elif kind == "done":
+                    all_messages = payload
+                    break
+                elif kind == "error":
+                    raise payload
+
+            extracted = extract_agent_result(all_messages or [])
+            session["history"].append({"role": "user", "content": user_text})
+            session["history"].append({"role": "assistant", "content": extracted["text"]})
 
             a2ui_messages = create_chat_surface(
                 message_text=extracted["text"],

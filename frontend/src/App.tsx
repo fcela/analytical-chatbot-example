@@ -29,6 +29,7 @@ function ChatApp() {
   const [database, setDatabase] = useState<DatabaseInfo | null>(null)
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
+  const [statusText, setStatusText] = useState('')
   const [contextId, setContextId] = useState<string>('')
   const [chatHistory, setChatHistory] = useState<Array<{ role: string; content: string }>>([])
   const [a2uiMessages, setA2uiMessages] = useState<A2UIMessage[]>([])
@@ -125,8 +126,14 @@ function ChatApp() {
               try {
                 const eventData = JSON.parse(line.slice(6))
 
+                // Check for progress updates
+                if (eventData.progress) {
+                  setStatusText(eventData.progress)
+                }
+
                 // Check for A2UI DataParts
                 if (eventData.parts) {
+                  setStatusText('')
                   for (const part of eventData.parts) {
                     const data = part?.root?.data
                     const mimeType = part?.root?.metadata?.mimeType
@@ -138,6 +145,7 @@ function ChatApp() {
 
                 // Check for completion
                 if (eventData.status?.state === 'completed') {
+                  setStatusText('')
                   if (eventData.contextId) setContextId(eventData.contextId)
                 }
               } catch {
@@ -155,6 +163,7 @@ function ChatApp() {
       setChatHistory(h => [...h, { role: 'assistant', content: `Error: ${e}` }])
     } finally {
       setLoading(false)
+      setStatusText('')
     }
   }, [input, loading, contextId])
 
@@ -247,6 +256,7 @@ function ChatApp() {
             {loading && (
               <div className="msg assistant">
                 <div className="msg-content loading">
+                  <span className="status-text">{statusText || 'Thinking...'}</span>
                   <span className="dot"></span>
                   <span className="dot"></span>
                   <span className="dot"></span>
